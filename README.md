@@ -140,16 +140,20 @@ pub fn deinit(self: *Ui) void
 pub fn screen(self: *Ui) *Screen
 pub fn size(self: *const Ui) Size
 pub fn nextEvent(self: *Ui) !?Event
+pub fn pollEvent(self: *Ui) !?Event
 ```
 
 `nextEvent` blocks until a key is pressed or the terminal is resized. It returns
-`null` when the input stream ends.
+`null` when the input stream ends. `pollEvent` returns a queued event without
+blocking, or `null` if none is ready. Use it to process an input burst before
+rendering once.
 
 ```zig
 pub const Options = struct {
     /// Override the terminal descriptor. Null opens /dev/tty.
     tty: ?std.posix.fd_t = null,
     alternate_screen: bool = true,
+    synchronized_output: bool = true,
     /// How long a lone ESC waits for the rest of a sequence.
     escape_timeout_ms: u16 = 25,
 };
@@ -210,6 +214,7 @@ pub fn write(self: *Screen, text: []const u8) void
 pub fn writeStyled(self: *Screen, text: []const u8, style: Style) void
 pub fn clearToEndOfLine(self: *Screen) void
 pub fn showCursor(self: *Screen, row: u16, col: u16) void
+pub fn setSynchronizedOutput(self: *Screen, enabled: bool) void
 pub fn present(self: *Screen) !void
 
 size: Size    // field: current terminal dimensions
@@ -270,7 +275,12 @@ front and back cell grids and writes only changed row spans. Moving a cursor
 usually updates two rows.
 
 The grids, text storage, and ANSI output buffer are reused. Steady-state frames
-do not allocate. A resize clears and repaints the screen once.
+do not allocate. Long runs of styled spaces use terminal REP sequences. A
+resize clears and repaints the screen once.
+
+Synchronized output is enabled by default. Supporting terminals hold mode 2026
+frames until `present()` writes the closing sequence. Other terminals normally
+ignore the mode. Set `synchronized_output = false` if needed.
 
 Clipping uses terminal columns, not byte length. Text past the right edge is
 truncated. A wide character that would cross the edge is replaced with a space.

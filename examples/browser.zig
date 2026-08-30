@@ -741,10 +741,21 @@ pub fn main() !void {
     model.setStatus("welcome — press q to quit", .{});
     render(&model, ui.screen());
 
-    while (try ui.nextEvent()) |ev| {
-        const effect = update(&model, .{ .terminal = ev });
-        if (executeEffect(&model, effect)) |follow_up| {
-            _ = update(&model, follow_up);
+    // Drain short input bursts before rendering. This keeps key repeat from
+    // producing one full model render per queued event. The limit prevents a
+    // continuous producer (for example, a large paste) from starving output.
+    const max_events_per_frame = 64;
+    while (try ui.nextEvent()) |first| {
+        var pending: ?zooi.Event = first;
+        var handled: usize = 0;
+        while (pending) |ev| {
+            const effect = update(&model, .{ .terminal = ev });
+            if (executeEffect(&model, effect)) |follow_up| {
+                _ = update(&model, follow_up);
+            }
+            handled += 1;
+            if (model.quit or handled == max_events_per_frame) break;
+            pending = try ui.pollEvent();
         }
         if (model.quit) break;
         render(&model, ui.screen());

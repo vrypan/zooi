@@ -38,12 +38,14 @@ pub const Options = struct {
     /// Override the descriptor. Null opens /dev/tty.
     tty: ?Fd = null,
     alternate_screen: bool = true,
+    synchronized_output: bool = true,
 };
 
 const enter_alt = "\x1b[?1049h";
 const leave_alt = "\x1b[?1049l";
 const hide_cursor = "\x1b[?25l";
 const show_cursor = "\x1b[?25h";
+const end_sync = "\x1b[?2026l";
 const reset_sgr = "\x1b[0m";
 const clear_all = "\x1b[2J\x1b[H";
 
@@ -56,6 +58,7 @@ const Saved = struct {
     out_fd: Fd,
     term: posix.termios,
     alt: bool,
+    sync: bool,
 };
 
 /// Restore the terminal from a panic handler or a fatal-signal handler.
@@ -68,9 +71,15 @@ const Saved = struct {
 pub fn restore() void {
     const s = global orelse return;
     if (s.alt) {
-        sys.writeAll(s.out_fd, show_cursor ++ leave_alt ++ reset_sgr) catch {};
+        if (s.sync)
+            sys.writeAll(s.out_fd, end_sync ++ show_cursor ++ leave_alt ++ reset_sgr) catch {}
+        else
+            sys.writeAll(s.out_fd, show_cursor ++ leave_alt ++ reset_sgr) catch {};
     } else {
-        sys.writeAll(s.out_fd, show_cursor ++ reset_sgr) catch {};
+        if (s.sync)
+            sys.writeAll(s.out_fd, end_sync ++ show_cursor ++ reset_sgr) catch {}
+        else
+            sys.writeAll(s.out_fd, show_cursor ++ reset_sgr) catch {};
     }
     // DRAIN so the last frame is transmitted under the settings it was
     // written for, and queued typeahead survives for the next program.
@@ -87,6 +96,7 @@ pub const Terminal = struct {
     owned: ?Fd,
     saved: posix.termios,
     alt: bool,
+    sync: bool = true,
     wake: [2]Fd,
     prev_winch: posix.Sigaction,
 
@@ -136,6 +146,7 @@ pub const Terminal = struct {
             .out_fd = out,
             .term = saved,
             .alt = options.alternate_screen,
+            .sync = options.synchronized_output,
         };
 
         return .{
@@ -144,6 +155,7 @@ pub const Terminal = struct {
             .owned = acquired.owned,
             .saved = saved,
             .alt = options.alternate_screen,
+            .sync = options.synchronized_output,
             .wake = wake,
             .prev_winch = prev,
         };
@@ -153,9 +165,15 @@ pub const Terminal = struct {
     /// must not skip the ones after it.
     pub fn deinit(self: *Terminal) void {
         if (self.alt) {
-            sys.writeAll(self.out_fd, show_cursor ++ leave_alt ++ reset_sgr) catch {};
+            if (self.sync)
+                sys.writeAll(self.out_fd, end_sync ++ show_cursor ++ leave_alt ++ reset_sgr) catch {}
+            else
+                sys.writeAll(self.out_fd, show_cursor ++ leave_alt ++ reset_sgr) catch {};
         } else {
-            sys.writeAll(self.out_fd, show_cursor ++ reset_sgr) catch {};
+            if (self.sync)
+                sys.writeAll(self.out_fd, end_sync ++ show_cursor ++ reset_sgr) catch {}
+            else
+                sys.writeAll(self.out_fd, show_cursor ++ reset_sgr) catch {};
         }
         posix.tcsetattr(self.in_fd, .DRAIN, self.saved) catch {};
 

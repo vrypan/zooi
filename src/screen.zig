@@ -26,6 +26,9 @@ const sys = @import("sys.zig");
 const width = @import("width.zig");
 const Size = @import("event.zig").Size;
 
+const begin_sync = "\x1b[?2026h";
+const end_sync = "\x1b[?2026l";
+
 pub const Color = union(enum) {
     /// The terminal's own 16 colors. Prefer this: it respects the palette the
     /// user chose.
@@ -86,6 +89,7 @@ pub const Screen = struct {
     back_text: std.ArrayList(u8) = .empty,
     front_size: Size = .{ .rows = 0, .cols = 0 },
     front_valid: bool = false,
+    synchronized_output: bool = true,
 
     /// Logical drawing cursor and style.
     row: u16 = 0,
@@ -107,6 +111,12 @@ pub const Screen = struct {
         self.back.deinit(self.gpa);
         self.front_text.deinit(self.gpa);
         self.back_text.deinit(self.gpa);
+    }
+
+    /// Wrap each presented frame in DEC synchronized-output mode. Enabled by
+    /// default; unsupported terminals normally ignore the private mode.
+    pub fn setSynchronizedOutput(self: *Screen, enabled: bool) void {
+        self.synchronized_output = enabled;
     }
 
     /// Start a complete logical frame. The previous terminal image remains in
@@ -131,6 +141,7 @@ pub const Screen = struct {
         // This small preamble is emitted even for an unchanged frame. It
         // gives every diff a known style and cursor state without retaining
         // terminal-global state that another writer could invalidate.
+        if (self.synchronized_output) self.raw(begin_sync);
         self.raw("\x1b[0m\x1b[H\x1b[?25l");
     }
 
@@ -185,6 +196,7 @@ pub const Screen = struct {
             if (c.row < self.size.rows and c.col < self.size.cols)
                 self.print("\x1b[{d};{d}H\x1b[?25h", .{ c.row + 1, c.col + 1 });
         }
+        if (self.synchronized_output) self.raw(end_sync);
         if (self.err) |e| return e;
 
         sys.writeAll(self.fd, self.buf.items) catch return error.WriteFailed;
@@ -357,6 +369,25 @@ pub const Screen = struct {
                 continue;
             }
 
+            if (self.isSpace(at)) {
+                const run = self.spaceRun(at, last);
+                self.emitStyle(cell.style);
+                const repeats = run - 1;
+                const rep_bytes = 4 + decimalDigits(repeats);
+                if (run > rep_bytes) {
+                    // REP repeats the preceding graphic character with its
+                    // rendition. One literal space plus CSI Ps b is smaller
+                    // than a long styled-space run and preserves attributes.
+                    self.raw(" ");
+                    self.print("\x1b[{d}b", .{repeats});
+                } else {
+                    const spaces = "     ";
+                    self.raw(spaces[0..run]);
+                }
+                at += run;
+                continue;
+            }
+
             self.emitStyle(cell.style);
             self.raw(self.back_text.items[cell.text_off..][0..cell.text_len]);
             at += cell.columns;
@@ -382,6 +413,28 @@ pub const Screen = struct {
     fn allBlank(self: *const Screen, from: usize, end: usize) bool {
         for (self.back.items[from..end]) |cell| if (!cell.isBlank()) return false;
         return true;
+    }
+
+    fn isSpace(self: *const Screen, at: usize) bool {
+        const cell = self.back.items[at];
+        return !cell.continuation and cell.columns == 1 and cell.text_len == 1 and
+            self.back_text.items[cell.text_off] == ' ';
+    }
+
+    fn spaceRun(self: *const Screen, from: usize, end: usize) usize {
+        const style = self.back.items[from].style;
+        var at = from;
+        while (at < end and self.isSpace(at) and
+            std.meta.eql(style, self.back.items[at].style)) : (at += 1)
+        {}
+        return at - from;
+    }
+
+    fn decimalDigits(value: usize) usize {
+        var n = value;
+        var digits: usize = 1;
+        while (n >= 10) : (n /= 10) digits += 1;
+        return digits;
     }
 
     fn emitStyle(self: *Screen, style: Style) void {

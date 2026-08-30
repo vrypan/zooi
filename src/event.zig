@@ -40,6 +40,9 @@ pub const Ui = struct {
         /// Override the terminal descriptor. Null opens /dev/tty.
         tty: ?sys.Fd = null,
         alternate_screen: bool = true,
+        /// Present complete frames atomically on terminals that implement DEC
+        /// mode 2026. Unsupported terminals normally ignore the mode.
+        synchronized_output: bool = true,
         /// How long a lone ESC waits for the rest of a sequence before being
         /// taken as the Escape key. 25ms is long enough that a local
         /// terminal's arrow-key bytes always arrive together and short enough
@@ -57,13 +60,16 @@ pub const Ui = struct {
         var term = try terminal.Terminal.init(.{
             .tty = options.tty,
             .alternate_screen = options.alternate_screen,
+            .synchronized_output = options.synchronized_output,
         });
         errdefer term.deinit();
 
         const dims = term.size();
+        var scr = Screen.init(gpa, term.out_fd, dims);
+        scr.setSynchronizedOutput(options.synchronized_output);
         return .{
             .term = term,
-            .scr = Screen.init(gpa, term.out_fd, dims),
+            .scr = scr,
             .escape_timeout_ms = options.escape_timeout_ms,
             .last_size = dims,
         };
@@ -88,15 +94,30 @@ pub const Ui = struct {
     /// Returns null when the input stream ends, which for a terminal means the
     /// session is over.
     pub fn nextEvent(self: *Ui) Error!?Event {
+        return self.readEvent(true);
+    }
+
+    /// Return the next event that is already queued, without blocking.
+    ///
+    /// Applications can call this after `nextEvent()` to apply a burst of
+    /// input before rendering once. Null means no complete event is available
+    /// now, or that the input stream ended.
+    pub fn pollEvent(self: *Ui) Error!?Event {
+        return self.readEvent(false);
+    }
+
+    fn readEvent(self: *Ui, block: bool) Error!?Event {
         while (true) {
             // Drain the parser before any syscall: one read can carry several
             // keys, and polling between them would be both wrong and slow.
             if (self.parser.next()) |key| return .{ .key = key };
 
-            // A finite timeout only while an escape sequence is half-arrived.
-            // At every other moment this blocks indefinitely, which is what
-            // "no periodic polling" means in practice.
-            const timeout: i32 = if (self.parser.awaitingEscape())
+            // nextEvent uses a finite timeout only while an escape sequence is
+            // half-arrived and otherwise blocks indefinitely. pollEvent uses
+            // zero so applications can drain a burst without waiting.
+            const timeout: i32 = if (!block)
+                0
+            else if (self.parser.awaitingEscape())
                 @intCast(self.escape_timeout_ms)
             else
                 -1;
@@ -111,6 +132,7 @@ pub const Ui = struct {
             const ready = posix.poll(&fds, timeout) catch return error.PollFailed;
 
             if (ready == 0) {
+                if (!block) return null;
                 // Nothing arrived in time: the pending ESC was the key.
                 if (self.parser.timeout()) |key| return .{ .key = key };
                 continue;

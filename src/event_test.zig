@@ -95,6 +95,26 @@ test "several keys in one read are drained before polling again" {
     try expectEqual(event.Event{ .key = .down }, (try f.ui.nextEvent()).?);
 }
 
+test "pollEvent drains queued keys without waiting" {
+    var f = try Fixture.init(25);
+    defer f.deinit();
+
+    try f.send("abc");
+    try expectEqual(@as(u21, 'a'), (try f.ui.nextEvent()).?.key.character);
+    try expectEqual(@as(u21, 'b'), (try f.ui.pollEvent()).?.key.character);
+    try expectEqual(@as(u21, 'c'), (try f.ui.pollEvent()).?.key.character);
+    try expect(try f.ui.pollEvent() == null);
+}
+
+test "pollEvent does not resolve a lone escape early" {
+    var f = try Fixture.init(5);
+    defer f.deinit();
+
+    try f.send("\x1b");
+    try expect(try f.ui.pollEvent() == null);
+    try expectEqual(event.Event{ .key = .escape }, (try f.ui.nextEvent()).?);
+}
+
 test "an input burst larger than the parser buffer loses no keys" {
     var f = try Fixture.init(25);
     defer f.deinit();

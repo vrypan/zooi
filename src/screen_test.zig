@@ -9,7 +9,10 @@ const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 const gpa = std.testing.allocator;
 
-const preamble = "\x1b[0m\x1b[H\x1b[?25l";
+const begin_sync = "\x1b[?2026h";
+const end_sync = "\x1b[?2026l";
+const draw_preamble = "\x1b[0m\x1b[H\x1b[?25l";
+const preamble = begin_sync ++ draw_preamble;
 
 /// Present writes for real, so tests aim it at /dev/null and assert against
 /// `frame()`. Opened once and left open for the life of the test binary.
@@ -36,6 +39,27 @@ test "begin prepares a retained frame without painting cells" {
     s.move(3, 7);
     s.write("hello");
     try expectEqualStrings(preamble, s.frame());
+}
+
+test "present wraps output in synchronized-update mode" {
+    var s = testScreen(2, 20);
+    defer s.deinit();
+    s.begin();
+    s.write("frame");
+    try s.present();
+    try expect(std.mem.startsWith(u8, s.frame(), begin_sync));
+    try expect(std.mem.endsWith(u8, s.frame(), end_sync));
+}
+
+test "synchronized output can be disabled" {
+    var s = testScreen(2, 20);
+    defer s.deinit();
+    s.setSynchronizedOutput(false);
+    s.begin();
+    s.write("frame");
+    try expectEqualStrings(draw_preamble, s.frame());
+    try s.present();
+    try expect(std.mem.indexOf(u8, s.frame(), "?2026") == null);
 }
 
 test "the first frame clears once and paints only populated spans" {
@@ -71,7 +95,7 @@ test "an identical second frame emits no cell updates" {
     s.move(1, 4);
     s.write("same");
     try s.present();
-    try expectEqualStrings(preamble, s.frame());
+    try expectEqualStrings(preamble ++ end_sync, s.frame());
 }
 
 test "changing cursor style damages only the old and new rows" {
@@ -215,7 +239,7 @@ test "combining marks are retained with their base cell" {
     s.begin();
     s.write("cafe\u{301}");
     try s.present();
-    try expectEqualStrings(preamble, s.frame());
+    try expectEqualStrings(preamble ++ end_sync, s.frame());
 }
 
 test "writes to an off-screen row produce no cells" {
@@ -253,6 +277,28 @@ test "identical adjacent styles emit one SGR run" {
     try expect(std.mem.indexOf(u8, out, "ab") != null);
 }
 
+test "long styled space runs use REP" {
+    var s = testScreen(2, 40);
+    defer s.deinit();
+    s.begin();
+    s.writeStyled("                    ", .{ .reverse = true });
+    try s.present();
+    const out = body(&s);
+    try expect(std.mem.indexOf(u8, out, " \x1b[19b") != null);
+    try expect(std.mem.count(u8, out, "\x1b[7m") == 1);
+}
+
+test "short space runs stay literal" {
+    var s = testScreen(2, 20);
+    defer s.deinit();
+    s.begin();
+    s.writeStyled("    x", .{ .reverse = true });
+    try s.present();
+    const out = body(&s);
+    try expect(std.mem.indexOf(u8, out, "    x") != null);
+    try expect(std.mem.indexOf(u8, out, "b") == null);
+}
+
 test "changed styles and all color forms are encoded" {
     var s = testScreen(2, 20);
     defer s.deinit();
@@ -278,7 +324,7 @@ test "showCursor positions and reveals the cursor at present time" {
     s.begin();
     s.showCursor(2, 5);
     try s.present();
-    try expect(std.mem.endsWith(u8, s.frame(), "\x1b[3;6H\x1b[?25h"));
+    try expect(std.mem.endsWith(u8, s.frame(), "\x1b[3;6H\x1b[?25h" ++ end_sync));
 }
 
 test "a frame without showCursor leaves the cursor hidden" {
