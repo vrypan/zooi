@@ -163,9 +163,16 @@ pub const Options = struct {
 };
 ```
 
-zooi opens `/dev/tty` rather than using stdout, so `yourprog > log` and
-`yourprog | head` do not paint the interface into a pipe or read keystrokes
-from a file.
+zooi picks its own descriptors so `yourprog > log` and `yourprog | head` do
+not paint the interface into a pipe or read keystrokes from a file. Input and
+output are chosen separately: input prefers an inherited terminal among
+stdin/stderr, output prefers stdout, and `/dev/tty` is the fallback for either.
+
+Input avoids `/dev/tty` where it can because of a macOS defect — `poll()`
+returns `POLLNVAL` for a freshly-opened `/dev/tty`, while polling an inherited
+terminal works. Output is never polled, so `/dev/tty` is safe there. A program
+with *both* stdin and stderr redirected away from a terminal falls back to
+`/dev/tty` for input and will not receive keys on macOS; on Linux it works.
 
 ### `Event` and `Size`
 

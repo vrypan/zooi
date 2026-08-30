@@ -1,6 +1,22 @@
-//! Events delivered by the loop, and the terminal dimensions they carry.
+//! The event source: one blocking wait over the terminal and a self-pipe.
 //!
-//! `Event` and `Ui` join `Size` here when the event source lands.
+//! Spec properties this loop has to preserve, all of them falsifiable: one
+//! thread, blocking while idle, no periodic polling, no async runtime, no
+//! worker pool, and all rendering and state changes on the loop. That list is
+//! the whole of the concurrency design — a timer thread added to handle the
+//! escape timeout would break every line of it.
+
+const std = @import("std");
+const posix = std.posix;
+const Allocator = std.mem.Allocator;
+
+const sys = @import("sys.zig");
+const terminal = @import("terminal.zig");
+const input = @import("input.zig");
+const screen_mod = @import("screen.zig");
+
+const Screen = screen_mod.Screen;
+const Key = input.Key;
 
 /// Terminal dimensions.
 ///
@@ -10,4 +26,133 @@
 pub const Size = struct {
     rows: u16,
     cols: u16,
+};
+
+pub const Event = union(enum) {
+    key: Key,
+    resize: Size,
+};
+
+pub const Error = terminal.Error || error{ OutOfMemory, ReadFailed, PollFailed };
+
+pub const Ui = struct {
+    pub const Options = struct {
+        /// Override the terminal descriptor. Null opens /dev/tty.
+        tty: ?sys.Fd = null,
+        alternate_screen: bool = true,
+        /// How long a lone ESC waits for the rest of a sequence before being
+        /// taken as the Escape key. 25ms is long enough that a local
+        /// terminal's arrow-key bytes always arrive together and short enough
+        /// that Escape feels immediate; a slow link may want more.
+        escape_timeout_ms: u16 = 25,
+    };
+
+    term: terminal.Terminal,
+    scr: Screen,
+    parser: input.Parser = .{},
+    escape_timeout_ms: u16,
+    last_size: Size,
+
+    pub fn init(gpa: Allocator, options: Options) Error!Ui {
+        var term = try terminal.Terminal.init(.{
+            .tty = options.tty,
+            .alternate_screen = options.alternate_screen,
+        });
+        errdefer term.deinit();
+
+        const dims = term.size();
+        return .{
+            .term = term,
+            .scr = Screen.init(gpa, term.out_fd, dims),
+            .escape_timeout_ms = options.escape_timeout_ms,
+            .last_size = dims,
+        };
+    }
+
+    pub fn deinit(self: *Ui) void {
+        self.scr.deinit();
+        self.term.deinit();
+    }
+
+    /// The frame buffer. Render into it, then call `present()` on it.
+    pub fn screen(self: *Ui) *Screen {
+        return &self.scr;
+    }
+
+    pub fn size(self: *const Ui) Size {
+        return self.last_size;
+    }
+
+    /// Block until a key is pressed or the terminal is resized.
+    ///
+    /// Returns null when the input stream ends, which for a terminal means the
+    /// session is over.
+    pub fn nextEvent(self: *Ui) Error!?Event {
+        while (true) {
+            // Drain the parser before any syscall: one read can carry several
+            // keys, and polling between them would be both wrong and slow.
+            if (self.parser.next()) |key| return .{ .key = key };
+
+            // A finite timeout only while an escape sequence is half-arrived.
+            // At every other moment this blocks indefinitely, which is what
+            // "no periodic polling" means in practice.
+            const timeout: i32 = if (self.parser.awaitingEscape())
+                @intCast(self.escape_timeout_ms)
+            else
+                -1;
+
+            var fds = [_]posix.pollfd{
+                .{ .fd = self.term.in_fd, .events = posix.POLL.IN, .revents = 0 },
+                .{ .fd = self.term.wakeFd(), .events = posix.POLL.IN, .revents = 0 },
+            };
+
+            // std.posix.poll retries EINTR itself, so a signal arriving mid-wait
+            // needs no handling here.
+            const ready = posix.poll(&fds, timeout) catch return error.PollFailed;
+
+            if (ready == 0) {
+                // Nothing arrived in time: the pending ESC was the key.
+                if (self.parser.timeout()) |key| return .{ .key = key };
+                continue;
+            }
+
+            // Resize first when both are ready: pending keystrokes were typed
+            // after the resize, so they should be interpreted against the new
+            // size.
+            if (fds[1].revents & posix.POLL.IN != 0) {
+                if (self.handleResize()) |event| return event;
+                continue;
+            }
+
+            if (fds[0].revents & posix.POLL.IN != 0) {
+                var buf: [1024]u8 = undefined;
+                const n = posix.read(self.term.in_fd, &buf) catch |err| switch (err) {
+                    error.WouldBlock => continue,
+                    else => return error.ReadFailed,
+                };
+                if (n == 0) return null; // end of stream
+                _ = self.parser.feed(buf[0..n]);
+                continue;
+            }
+
+            // Hangup or error on either descriptor ends the session.
+            const broken = posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL;
+            if (fds[0].revents & broken != 0) return null;
+        }
+    }
+
+    /// Collapse every pending notification into at most one event.
+    fn handleResize(self: *Ui) ?Event {
+        self.term.drainWake();
+        const now = self.term.size();
+        // A burst during a window drag costs one redraw, not forty — and a
+        // notification that did not actually change the size costs none.
+        if (now.rows == self.last_size.rows and now.cols == self.last_size.cols)
+            return null;
+        self.last_size = now;
+        // Update the screen before returning, or the application's next render
+        // clips to the old width for exactly one visibly wrong frame.
+        self.scr.size = now;
+        return .{ .resize = now };
+    }
 };

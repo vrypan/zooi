@@ -9,11 +9,14 @@
 
 const std = @import("std");
 
+pub const Ui = @import("event.zig").Ui;
+pub const Event = @import("event.zig").Event;
 pub const Key = @import("input.zig").Key;
 pub const Size = @import("event.zig").Size;
 pub const Screen = @import("screen.zig").Screen;
 pub const Style = @import("screen.zig").Style;
 pub const Color = @import("screen.zig").Color;
+pub const restore = @import("terminal.zig").restore;
 
 test {
     std.testing.refAllDecls(@This());
