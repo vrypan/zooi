@@ -12,6 +12,43 @@ const terminal = @import("terminal.zig");
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 
+test "writeAll survives a non-blocking descriptor that fills up" {
+    // O_NONBLOCK is a property of the shared open file description, so a parent
+    // process can leave it set on the terminal zooi inherits. A frame larger
+    // than the kernel buffer then writes short with EAGAIN, and giving up there
+    // would kill a working application over a slow link.
+    const p = try sys.selfPipe();
+    defer {
+        sys.close(p[0]);
+        sys.close(p[1]);
+    }
+
+    const big = try std.testing.allocator.alloc(u8, 1 << 20);
+    defer std.testing.allocator.free(big);
+    @memset(big, 'x');
+
+    // The reader stops on the flag as well as on the byte count, so a
+    // regression fails this test instead of hanging it.
+    var stop = std.atomic.Value(bool).init(false);
+    const drain = try std.Thread.spawn(.{}, struct {
+        fn run(fd: sys.Fd, total: usize, halt: *std.atomic.Value(bool)) void {
+            var buf: [4096]u8 = undefined;
+            var got: usize = 0;
+            while (got < total and !halt.load(.acquire)) {
+                const n = posix.read(fd, &buf) catch continue;
+                if (n == 0) return;
+                got += n;
+            }
+        }
+    }.run, .{ p[0], big.len, &stop });
+    defer {
+        stop.store(true, .release);
+        drain.join();
+    }
+
+    try sys.writeAll(p[1], big);
+}
+
 test "the self-pipe carries a wakeup" {
     const p = try sys.selfPipe();
     defer {

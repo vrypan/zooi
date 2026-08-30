@@ -199,7 +199,14 @@ pub const Screen = struct {
         if (self.synchronized_output) self.raw(end_sync);
         if (self.err) |e| return e;
 
-        sys.writeAll(self.fd, self.buf.items) catch return error.WriteFailed;
+        sys.writeAll(self.fd, self.buf.items) catch {
+            // Part of the frame may already be on screen, so the front grid no
+            // longer describes the terminal and cannot be diffed against.
+            // Dropping it costs one full repaint; keeping it would corrupt
+            // every later frame with no way back.
+            self.front_valid = false;
+            return error.WriteFailed;
+        };
 
         // The terminal now matches the back grid. Swapping makes it the next
         // frame's immutable comparison image without copying any cells/text.

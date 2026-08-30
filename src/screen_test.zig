@@ -1,5 +1,6 @@
 const std = @import("std");
 const screen_mod = @import("screen.zig");
+const sys = @import("sys.zig");
 const Screen = screen_mod.Screen;
 const Style = screen_mod.Style;
 const Size = @import("event.zig").Size;
@@ -417,4 +418,28 @@ test "an allocation failure latches and surfaces at present" {
     s.writeStyled("world", .{ .bold = true });
     s.clearToEndOfLine();
     try std.testing.expectError(error.OutOfMemory, s.present());
+}
+
+test "a failed present gives up the diff baseline instead of corrupting it" {
+    // A failed write leaves the terminal showing neither the old frame nor the
+    // whole new one. Diffing the next frame against a grid the terminal never
+    // reached would corrupt every frame after it, so the baseline is dropped
+    // and the next present repaints in full.
+    const p = try sys.selfPipe();
+    defer sys.close(p[1]);
+
+    var s = Screen.init(gpa, p[1], .{ .rows = 1, .cols = 8 });
+    defer s.deinit();
+
+    s.begin();
+    s.write("hi");
+    try s.present();
+    try expect(s.front_valid);
+
+    // With no reader left, the next write fails outright.
+    sys.close(p[0]);
+    s.begin();
+    s.write("bye");
+    try std.testing.expectError(error.WriteFailed, s.present());
+    try expect(!s.front_valid);
 }

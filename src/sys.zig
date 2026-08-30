@@ -46,9 +46,25 @@ pub fn write(fd: Fd, bytes: []const u8) error{WriteFailed}!usize {
         switch (posix.errno(rc)) {
             .SUCCESS => return @intCast(rc),
             .INTR => continue,
+            // O_NONBLOCK belongs to the open file description, which is shared
+            // and inherited, so an ancestor process can leave it set on the
+            // terminal without zooi ever asking for it. Waiting for writability
+            // gives back the blocking semantics the rest of the library assumes
+            // instead of failing a frame because the terminal fell behind.
+            .AGAIN => if (waitWritable(fd)) continue else return error.WriteFailed,
             else => return error.WriteFailed,
         }
     }
+}
+
+/// Block until `fd` accepts more bytes. False means it never will.
+///
+/// `poll` is on POSIX's async-signal-safe list, so this keeps `restore()`
+/// callable from a signal handler.
+fn waitWritable(fd: Fd) bool {
+    var fds = [_]posix.pollfd{.{ .fd = fd, .events = posix.POLL.OUT, .revents = 0 }};
+    _ = posix.poll(&fds, -1) catch return false;
+    return fds[0].revents & posix.POLL.OUT != 0;
 }
 
 pub fn writeAll(fd: Fd, bytes: []const u8) error{WriteFailed}!void {

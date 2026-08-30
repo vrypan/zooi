@@ -166,9 +166,13 @@ pub const Ui = struct {
                 continue;
             }
 
-            // Hangup or error on either descriptor ends the session.
+            // Hangup or error on either descriptor ends the session. Both are
+            // checked: with `events` set to POLL.IN, the only revents a
+            // descriptor can report are IN and these three, so covering them
+            // here makes the loop total. Missing one would leave poll returning
+            // the same unhandled condition forever at full CPU.
             const broken = posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL;
-            if (fds[0].revents & broken != 0) return null;
+            if ((fds[0].revents | fds[1].revents) & broken != 0) return null;
         }
     }
 
