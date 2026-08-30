@@ -6,6 +6,19 @@
 //! holds little enough data that this is fast, and it removes an entire class
 //! of stale-cell bugs.
 //!
+//! ## Why the screen is not cleared
+//!
+//! "Full redraw" describes what the application writes, not what the terminal
+//! is told to do. Emitting `ESC [ 2 J` each frame blanks every cell and then
+//! repaints it, which the eye reads as flicker and therefore as lag, even
+//! though building the frame takes tens of microseconds.
+//!
+//! Instead a row is erased in full the first time the frame positions onto it,
+//! and rows the frame never visited are blanked at `present()`. The visible
+//! result is identical to clearing — no stale cell survives a frame, including
+//! in the gaps of a row drawn at scattered columns — but the terminal repaints
+//! a row at a time rather than blanking everything first.
+//!
 //! ## Rows and columns are 0-based
 //!
 //! Every index in zooi is 0-based; the conversion to the terminal's 1-based
@@ -53,6 +66,10 @@ pub const Style = struct {
 
 pub const Error = error{ OutOfMemory, WriteFailed };
 
+/// Rows the visited-set can track. A terminal taller than this falls back to
+/// clearing the screen, which is correct and merely flickers.
+const max_tracked_rows = 1024;
+
 pub const Screen = struct {
     /// Terminal dimensions as of the last resize. Read this in `render` to lay
     /// out; it is never stale within a frame.
@@ -71,6 +88,11 @@ pub const Screen = struct {
     cursor: ?struct { row: u16, col: u16 } = null,
     /// First failure of the frame, returned by `present`.
     err: ?Error = null,
+
+    /// Rows this frame has positioned onto. Each is erased on first visit;
+    /// whatever is left over is blanked at present() so no stale content
+    /// survives.
+    visited: [max_tracked_rows / 8]u8 = @splat(0),
 
     pub fn init(gpa: Allocator, fd: sys.Fd, size: Size) Screen {
         return .{ .size = size, .gpa = gpa, .fd = fd };
@@ -91,7 +113,11 @@ pub const Screen = struct {
         self.emitted = .{};
         self.cursor = null;
         self.err = null;
-        self.raw("\x1b[0m\x1b[2J\x1b[H\x1b[?25l");
+        self.visited = @splat(0);
+        self.raw("\x1b[0m\x1b[H\x1b[?25l");
+        // A terminal too tall to track is cleared outright rather than left
+        // with stale rows.
+        if (self.size.rows > max_tracked_rows) self.raw("\x1b[2J");
     }
 
     /// Move the logical cursor. 0-based; converted to the terminal's 1-based
@@ -100,6 +126,15 @@ pub const Screen = struct {
         self.row = row;
         self.col = col;
         if (self.offScreen()) return;
+
+        // The first visit to a row erases the whole row, so a frame that
+        // draws at scattered columns has blank gaps rather than last frame's
+        // content. Later moves within the same row must not erase again.
+        if (!self.wasVisited(row)) {
+            self.markVisited(row);
+            self.print("\x1b[{d};1H\x1b[K", .{row + 1});
+            if (col == 0) return;
+        }
         self.print("\x1b[{d};{d}H", .{ row + 1, col + 1 });
     }
 
@@ -127,6 +162,7 @@ pub const Screen = struct {
 
     /// Flush the frame in a single write.
     pub fn present(self: *Screen) Error!void {
+        self.blankUnvisited();
         if (self.cursor) |c| {
             if (c.row < self.size.rows and c.col < self.size.cols)
                 self.print("\x1b[{d};{d}H\x1b[?25h", .{ c.row + 1, c.col + 1 });
@@ -141,6 +177,28 @@ pub const Screen = struct {
     }
 
     // --- internals ---------------------------------------------------------
+
+    fn markVisited(self: *Screen, row: u16) void {
+        if (row >= max_tracked_rows) return;
+        self.visited[row / 8] |= @as(u8, 1) << @intCast(row % 8);
+    }
+
+    fn wasVisited(self: *const Screen, row: u16) bool {
+        if (row >= max_tracked_rows) return true;
+        return self.visited[row / 8] & (@as(u8, 1) << @intCast(row % 8)) != 0;
+    }
+
+    /// Blank every row the frame never positioned onto. This is what replaces
+    /// the screen-wide clear, and it costs nothing for a frame that draws
+    /// every row.
+    fn blankUnvisited(self: *Screen) void {
+        if (self.size.rows > max_tracked_rows) return;
+        var row: u16 = 0;
+        while (row < self.size.rows) : (row += 1) {
+            if (self.wasVisited(row)) continue;
+            self.print("\x1b[{d};1H\x1b[K", .{row + 1});
+        }
+    }
 
     fn offScreen(self: *const Screen) bool {
         return self.row >= self.size.rows or self.col >= self.size.cols;

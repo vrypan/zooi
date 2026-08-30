@@ -549,9 +549,14 @@ fn renderHeader(m: *const Model, screen: *zooi.Screen) void {
     }) catch " zooi browser ";
     screen.move(0, 0);
     screen.writeStyled(text, header_style);
-    // Fill the rest of the row so the reverse-video bar spans the width.
-    var col = zooi.displayWidth(text);
-    while (col < m.size.cols) : (col += 1) screen.writeStyled(" ", header_style);
+    // Pad the reverse-video bar out to the full width in one write rather
+    // than a space at a time.
+    var pad: [256]u8 = @splat(' ');
+    const used = zooi.displayWidth(text);
+    if (used < m.size.cols) {
+        const n = @min(m.size.cols - used, pad.len);
+        screen.writeStyled(pad[0..n], header_style);
+    }
 }
 
 fn renderList(m: *const Model, screen: *zooi.Screen) void {
