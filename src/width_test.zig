@@ -50,30 +50,31 @@ test "table invariants hold" {
     }
 }
 
-test "fitPrefix truncates narrow text by column" {
-    const f = width.fitPrefix("hello", 3);
-    try expectEqual(@as(usize, 3), f.len);
-    try expectEqual(@as(usize, 3), f.width);
+test "step advances one codepoint at a time" {
+    const s1 = width.step("abc");
+    try expectEqual(@as(usize, 1), s1.len);
+    try expectEqual(@as(u2, 1), s1.width);
+    try expectEqual(@as(u21, 'a'), s1.cp.?);
+
+    const s2 = width.step("世界");
+    try expectEqual(@as(usize, 3), s2.len);
+    try expectEqual(@as(u2, 2), s2.width);
+    try expectEqual(@as(u21, 0x4E16), s2.cp.?);
 }
 
-test "fitPrefix excludes a wide character that would straddle the edge" {
-    // Two wide characters need four columns. In three, only the first fits,
-    // and the reported width is one less than the limit. The caller pads.
-    const f = width.fitPrefix("世界", 3);
-    try expectEqual(@as(usize, 3), f.len); // one 3-byte character
-    try expectEqual(@as(usize, 2), f.width);
+test "step reports no codepoint for malformed bytes" {
+    // The screen relies on `cp` being null here so it can drop the byte
+    // without mistaking it for a control character.
+    try expect(width.step("\xff").cp == null);
+    try expect(width.step("\x80").cp == null);
+    // Truncated: a valid lead with too few bytes behind it.
+    try expect(width.step("\xe4\xb8").cp == null);
 }
 
-test "fitPrefix with a zero limit takes nothing" {
-    const f = width.fitPrefix("anything", 0);
-    try expectEqual(@as(usize, 0), f.len);
-    try expectEqual(@as(usize, 0), f.width);
-}
-
-test "fitPrefix passes through text that already fits" {
-    const f = width.fitPrefix("hi", 80);
-    try expectEqual(@as(usize, 2), f.len);
-    try expectEqual(@as(usize, 2), f.width);
+test "step always advances" {
+    // The property every caller's loop depends on for termination.
+    const inputs = [_][]const u8{ "\xff", "\x80", "\xc2", "\xe4\xb8", "a", "世" };
+    for (inputs) |s| try expect(width.step(s).len >= 1);
 }
 
 test "invalid UTF-8 counts one column per bad byte" {
@@ -85,8 +86,6 @@ test "a truncated sequence does not read past the end" {
     // that trusts utf8ByteSequenceLength without checking what remains reads
     // out of bounds here.
     try expectEqual(@as(usize, 2), width.strWidth("\xe4\xb8"));
-    const f = width.fitPrefix("\xe4\xb8", 10);
-    try expectEqual(@as(usize, 2), f.len);
 }
 
 test "invalid bytes never stall the scan" {
@@ -96,8 +95,7 @@ test "invalid bytes never stall the scan" {
     };
     for (inputs) |s| {
         _ = width.strWidth(s);
-        const f = width.fitPrefix(s, 100);
-        try expect(f.len <= s.len);
+        try expect(width.step(s).len <= s.len);
     }
 }
 

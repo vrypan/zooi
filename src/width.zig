@@ -51,49 +51,39 @@ pub fn strWidth(bytes: []const u8) usize {
     var total: usize = 0;
     var i: usize = 0;
     while (i < bytes.len) {
-        const step = decode(bytes[i..]);
-        total += step.width;
-        i += step.len;
+        const s2 = step(bytes[i..]);
+        total += s2.width;
+        i += s2.len;
     }
     return total;
 }
 
-pub const Fit = struct {
-    /// Bytes of the prefix that fits.
+pub const Step = struct {
+    /// Bytes consumed. Always at least 1.
     len: usize,
-    /// Columns that prefix actually occupies. May be `limit - 1` when a wide
-    /// character was excluded for straddling the edge.
-    width: usize,
+    /// Columns occupied.
+    width: u2,
+    /// The decoded codepoint, or null for a byte that is not part of a
+    /// well-formed sequence. The screen uses this to recognise and drop
+    /// control characters.
+    cp: ?u21,
 };
-
-/// The longest prefix of `bytes` fitting in `limit` columns.
-///
-/// A wide character that would straddle the limit is excluded rather than
-/// half-drawn, so the caller must pad the reported width out to the limit if
-/// it needs the column filled. Returning the length as well as the width
-/// spares every caller from re-measuring.
-pub fn fitPrefix(bytes: []const u8, limit: usize) Fit {
-    var used: usize = 0;
-    var i: usize = 0;
-    while (i < bytes.len) {
-        const step = decode(bytes[i..]);
-        if (used + step.width > limit) break;
-        used += step.width;
-        i += step.len;
-    }
-    return .{ .len = i, .width = used };
-}
-
-const Step = struct { len: usize, width: u2 };
 
 /// One codepoint's worth of progress through a byte slice.
 ///
 /// Anything that is not a well-formed sequence advances exactly one byte and
-/// counts one column. That keeps the caller's loop monotonic: a truncated or
+/// counts one column. That keeps every caller's loop monotonic: a truncated or
 /// invalid sequence can never stall it or read past the end.
-fn decode(bytes: []const u8) Step {
-    const n = std.unicode.utf8ByteSequenceLength(bytes[0]) catch return .{ .len = 1, .width = 1 };
-    if (n > bytes.len) return .{ .len = 1, .width = 1 };
-    const cp = std.unicode.utf8Decode(bytes[0..n]) catch return .{ .len = 1, .width = 1 };
-    return .{ .len = n, .width = codepointWidth(cp) };
+///
+/// This rather than a "longest prefix that fits" helper, because the screen
+/// has to sanitise and measure in the same pass — it drops control bytes while
+/// counting columns, and a function returning only a prefix length cannot
+/// express that.
+pub fn step(bytes: []const u8) Step {
+    const n = std.unicode.utf8ByteSequenceLength(bytes[0]) catch
+        return .{ .len = 1, .width = 1, .cp = null };
+    if (n > bytes.len) return .{ .len = 1, .width = 1, .cp = null };
+    const cp = std.unicode.utf8Decode(bytes[0..n]) catch
+        return .{ .len = 1, .width = 1, .cp = null };
+    return .{ .len = n, .width = codepointWidth(cp), .cp = cp };
 }
