@@ -43,7 +43,7 @@ zooi does not call `linkLibC()`. If the application links libc, zooi uses it.
 Add the dependency:
 
 ```sh
-zig fetch --save git+https://github.com/vrypan/zooi.git#v0.1.0
+zig fetch --save git+https://github.com/vrypan/zooi.git#v0.1.1
 ```
 
 Add the module in `build.zig`:
@@ -53,7 +53,9 @@ const zooi = b.dependency("zooi", .{});
 exe.root_module.addImport("zooi", zooi.module("zooi"));
 ```
 
-To vendor zooi, copy `src/` and use `src/zooi.zig` as the module root.
+To vendor zooi, copy `src/` and use `src/zooi.zig` as the module root. See
+[`examples/minimal`](examples/minimal) for a complete consumer project with its
+own `build.zig`, `build.zig.zon`, and `src/main.zig`.
 
 ## Try it
 
@@ -86,24 +88,38 @@ pub fn main() !void {
     defer ui.deinit();
 
     var cursor: usize = 0;
-    render(&ui, cursor);
+    var running = true;
+    try render(&ui, cursor);
 
-    while (try ui.nextEvent()) |event| {
-        switch (event) {
-            .key => |key| switch (key) {
-                .up => cursor -|= 1,
-                .down => cursor = @min(cursor + 1, items.len - 1),
-                .ctrl_c => break,
-                .character => |c| if (c == 'q') break,
-                else => {},
-            },
-            .resize => {},
+    // Apply a short burst of queued input, then render once. The limit keeps a
+    // continuous producer from starving the display.
+    const max_events_per_frame = 64;
+    while (running) {
+        const first = (try ui.nextEvent()) orelse break;
+        var pending: ?zooi.Event = first;
+        var handled: usize = 0;
+        while (pending) |event| {
+            switch (event) {
+                .key => |key| switch (key) {
+                    .up => cursor -|= 1,
+                    .down => cursor = @min(cursor + 1, items.len - 1),
+                    .ctrl_c => running = false,
+                    .character => |c| if (c == 'q') {
+                        running = false;
+                    },
+                    else => {},
+                },
+                .resize => {},
+            }
+            handled += 1;
+            if (!running or handled == max_events_per_frame) break;
+            pending = try ui.pollEvent();
         }
-        render(&ui, cursor);
+        if (running) try render(&ui, cursor);
     }
 }
 
-fn render(ui: *zooi.Ui, cursor: usize) void {
+fn render(ui: *zooi.Ui, cursor: usize) !void {
     const screen = ui.screen();
     screen.begin();
     for (items, 0..) |item, i| {
@@ -116,7 +132,7 @@ fn render(ui: *zooi.Ui, cursor: usize) void {
             screen.write(item);
         }
     }
-    screen.present() catch {};
+    try screen.present();
 }
 ```
 
@@ -125,6 +141,20 @@ or output error. This keeps error handling out of layout code.
 
 The application owns the loop. `nextEvent()` returns one event and blocks when
 there is no input.
+
+### Integration rules
+
+- Keep one `Ui` alive for the terminal session and immediately `defer
+  ui.deinit()` after initialization.
+- Draw the complete logical frame between `begin()` and `present()`.
+- After `nextEvent()`, use `pollEvent()` to apply queued input before rendering.
+  Put a limit on each batch so continuous input cannot starve the display.
+- Do not print directly to the active terminal or generate application-side
+  ANSI sequences. Let `Screen` own terminal output.
+- Handle `ctrl_c`; zooi returns it as a key instead of raising `SIGINT`.
+- Propagate errors from `present()`. Install the restoration hook described in
+  [Terminal restoration](#terminal-restoration) if the application can panic or
+  handles fatal signals.
 
 ## API
 
@@ -368,7 +398,7 @@ Known limits:
 
 ## Versioning
 
-0.1.0 is the first release. The API may change before 1.0.0. Pin the `v0.1.0`
+0.1.0 was the first release. The API may change before 1.0.0. Pin the `v0.1.1`
 tag for reproducible builds.
 
 ## License

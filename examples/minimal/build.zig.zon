@@ -1,0 +1,16 @@
+.{
+    .name = .zooi_minimal,
+    .version = "0.0.0",
+    .fingerprint = 0xf7f56998826c414c,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        // This path makes the example build inside the zooi checkout. In a
+        // separate project, `zig fetch --save` writes the remote dependency.
+        .zooi = .{ .path = "../.." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

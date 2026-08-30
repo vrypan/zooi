@@ -24,6 +24,18 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run library tests");
 
+    // Keep the copyable consumer example compiling against the public module.
+    const minimal = b.addExecutable(.{
+        .name = "zooi-minimal-check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/minimal/src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    minimal.root_module.addImport("zooi", zooi_mod);
+    test_step.dependOn(&minimal.step);
+
     // One test root per concern. Adding a module means adding a file here.
     const roots = [_][]const u8{
         "src/zooi_test.zig",
