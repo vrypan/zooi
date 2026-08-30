@@ -38,9 +38,16 @@ test "printable characters decode as codepoints" {
 
 test "unbound control bytes are dropped, not surfaced" {
     var buf: [8]Key = undefined;
-    // Tab, and a few other C0 bytes the spec does not bind.
-    try expectEqual(@as(usize, 0), keys("\x09", &buf).len);
+    // C0 bytes the key set does not bind. Ctrl-Z (0x1a) is among them: ISIG is
+    // off, so it neither suspends the process nor reaches the application.
     try expectEqual(@as(usize, 0), keys("\x01\x02\x04", &buf).len);
+    try expectEqual(@as(usize, 0), keys("\x1a", &buf).len);
+}
+
+test "tab and shift-tab" {
+    try expectEqual(Key.tab, one("\x09").?);
+    // CBT: back-tab as input, whatever the sequence means as output.
+    try expectEqual(Key.shift_tab, one("\x1b[Z").?);
 }
 
 test "CSI sequences" {

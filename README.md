@@ -184,6 +184,8 @@ pub const Options = struct {
     tty: ?std.posix.fd_t = null,
     alternate_screen: bool = true,
     synchronized_output: bool = true,
+    /// Compress long runs of styled spaces with REP. See Rendering model.
+    repeat_sequences: bool = false,
     /// How long a lone ESC waits for the rest of a sequence.
     escape_timeout_ms: u16 = 25,
 };
@@ -221,19 +223,20 @@ pub const Key = union(enum) {
     page_up, page_down, home, end,
     shift_up, shift_down,
     enter, escape, backspace, delete,
+    tab, shift_tab,
     character: u21,
     ctrl_c,
 };
 ```
 
 `character` contains one printable Unicode codepoint decoded from UTF-8. Other
-control bytes are dropped.
+control bytes are dropped, Ctrl-Z among them; see [Non-goals](#non-goals).
 
 zooi disables `ISIG`, so Ctrl-C is returned as `ctrl_c` instead of raising a
 signal. Applications must handle it.
 
 Both CSI (`ESC [ A`) and SS3 (`ESC O A`) forms are supported for arrows,
-Home, and End.
+Home, and End. Shift-Tab is read from `ESC [ Z`.
 
 ### `Screen`
 
@@ -245,6 +248,7 @@ pub fn writeStyled(self: *Screen, text: []const u8, style: Style) void
 pub fn clearToEndOfLine(self: *Screen) void
 pub fn showCursor(self: *Screen, row: u16, col: u16) void
 pub fn setSynchronizedOutput(self: *Screen, enabled: bool) void
+pub fn setRepeatSequences(self: *Screen, enabled: bool) void
 pub fn present(self: *Screen) !void
 
 size: Size    // field: current terminal dimensions
@@ -305,8 +309,13 @@ front and back cell grids and writes only changed row spans. Moving a cursor
 usually updates two rows.
 
 The grids, text storage, and ANSI output buffer are reused. Steady-state frames
-do not allocate. Long runs of styled spaces use terminal REP sequences. A
-resize clears and repaints the screen once.
+do not allocate. A resize clears and repaints the screen once.
+
+Long runs of styled spaces can be compressed into a REP sequence (`CSI Ps b`),
+which saves under 100 bytes on a typical frame. It is off by default: a
+terminal that does not implement REP drops the sequence silently and paints
+styled backgrounds truncated to the width of their text. Set
+`repeat_sequences = true` when the terminal is known to support it.
 
 Synchronized output is enabled by default. Supporting terminals hold mode 2026
 frames until `present()` writes the closing sequence. Other terminals normally
@@ -395,6 +404,8 @@ Known limits:
   not. A family emoji built from several people and ZWJs will measure wrong.
 - **The retained grid is not application state.** It cannot be queried.
 - **Single-threaded.** All rendering and all state changes happen on the loop.
+- **No job control.** `ISIG` is off and Ctrl-Z is not delivered as a key, so a
+  zooi application cannot be suspended and resumed.
 
 ## Versioning
 

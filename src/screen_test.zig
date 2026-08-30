@@ -278,9 +278,26 @@ test "identical adjacent styles emit one SGR run" {
     try expect(std.mem.indexOf(u8, out, "ab") != null);
 }
 
-test "long styled space runs use REP" {
+test "styled space runs stay literal by default, at any length" {
+    // The default path has to emit runs of arbitrary length correctly. Before
+    // REP became opt-in nothing longer than five spaces could reach it.
+    for ([_]u16{ 1, 31, 32, 33, 64, 65, 200 }) |run| {
+        var s = Screen.init(gpa, nullFd(), .{ .rows = 1, .cols = run });
+        defer s.deinit();
+        s.begin();
+        var i: u16 = 0;
+        while (i < run) : (i += 1) s.writeStyled(" ", .{ .reverse = true });
+        try s.present();
+        const out = body(&s);
+        try expectEqual(@as(usize, run), std.mem.count(u8, out, " "));
+        try expect(std.mem.indexOf(u8, out, "b") == null);
+    }
+}
+
+test "long styled space runs use REP when it is enabled" {
     var s = testScreen(2, 40);
     defer s.deinit();
+    s.setRepeatSequences(true);
     s.begin();
     s.writeStyled("                    ", .{ .reverse = true });
     try s.present();

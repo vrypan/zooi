@@ -90,6 +90,7 @@ pub const Screen = struct {
     front_size: Size = .{ .rows = 0, .cols = 0 },
     front_valid: bool = false,
     synchronized_output: bool = true,
+    repeat_sequences: bool = false,
 
     /// Logical drawing cursor and style.
     row: u16 = 0,
@@ -117,6 +118,13 @@ pub const Screen = struct {
     /// default; unsupported terminals normally ignore the private mode.
     pub fn setSynchronizedOutput(self: *Screen, enabled: bool) void {
         self.synchronized_output = enabled;
+    }
+
+    /// Compress long runs of styled spaces with REP. Disabled by default; see
+    /// `emitSpaces` for why the saving is not worth the compatibility risk
+    /// unless the terminal is known.
+    pub fn setRepeatSequences(self: *Screen, enabled: bool) void {
+        self.repeat_sequences = enabled;
     }
 
     /// Start a complete logical frame. The previous terminal image remains in
@@ -379,18 +387,7 @@ pub const Screen = struct {
             if (self.isSpace(at)) {
                 const run = self.spaceRun(at, last);
                 self.emitStyle(cell.style);
-                const repeats = run - 1;
-                const rep_bytes = 4 + decimalDigits(repeats);
-                if (run > rep_bytes) {
-                    // REP repeats the preceding graphic character with its
-                    // rendition. One literal space plus CSI Ps b is smaller
-                    // than a long styled-space run and preserves attributes.
-                    self.raw(" ");
-                    self.print("\x1b[{d}b", .{repeats});
-                } else {
-                    const spaces = "     ";
-                    self.raw(spaces[0..run]);
-                }
+                self.emitSpaces(run);
                 at += run;
                 continue;
             }
@@ -398,6 +395,33 @@ pub const Screen = struct {
             self.emitStyle(cell.style);
             self.raw(self.back_text.items[cell.text_off..][0..cell.text_len]);
             at += cell.columns;
+        }
+    }
+
+    /// A run of spaces in the style already emitted.
+    ///
+    /// REP repeats the preceding graphic character with its rendition, so one
+    /// literal space plus CSI Ps b is smaller than a long styled-space run and
+    /// keeps its attributes. It is off by default because a terminal that does
+    /// not implement REP drops the sequence silently, leaving a styled
+    /// background truncated to the width of its text — a visible defect traded
+    /// for roughly 90 bytes on a frame that was never limited by bytes.
+    fn emitSpaces(self: *Screen, run: usize) void {
+        if (self.repeat_sequences) {
+            const repeats = run - 1;
+            // 4 covers ESC [ b plus the literal space that REP repeats.
+            if (run > 4 + decimalDigits(repeats)) {
+                self.raw(" ");
+                self.print("\x1b[{d}b", .{repeats});
+                return;
+            }
+        }
+        const spaces = " " ** 32;
+        var left = run;
+        while (left > 0) {
+            const n = @min(left, spaces.len);
+            self.raw(spaces[0..n]);
+            left -= n;
         }
     }
 

@@ -36,6 +36,8 @@ pub const Key = union(enum) {
     escape,
     backspace,
     delete,
+    tab,
+    shift_tab,
 
     /// A printable character. Control bytes never arrive as `character`, so a
     /// prompt can append this to a buffer with no filtering.
@@ -154,6 +156,7 @@ fn scan(bytes: []const u8) Scan {
     switch (b) {
         0x03 => return found(.ctrl_c, 1),
         '\r', '\n' => return found(.enter, 1),
+        0x09 => return found(.tab, 1),
         0x7f, 0x08 => return found(.backspace, 1),
         else => {},
     }
@@ -221,6 +224,8 @@ fn lookupCsi(params: []const u8, final: u8) ?Key {
             'D' => .left,
             'H' => .home,
             'F' => .end,
+            // CBT as an output sequence; universally back-tab as input.
+            'Z' => .shift_tab,
             else => null,
         };
     }

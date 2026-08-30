@@ -43,6 +43,10 @@ pub const Ui = struct {
         /// Present complete frames atomically on terminals that implement DEC
         /// mode 2026. Unsupported terminals normally ignore the mode.
         synchronized_output: bool = true,
+        /// Compress long runs of styled spaces with REP. Off by default: a
+        /// terminal that does not implement REP drops it silently and paints
+        /// styled backgrounds short, and the saving is under 100 bytes a frame.
+        repeat_sequences: bool = false,
         /// How long a lone ESC waits for the rest of a sequence before being
         /// taken as the Escape key. 25ms is long enough that a local
         /// terminal's arrow-key bytes always arrive together and short enough
@@ -67,6 +71,7 @@ pub const Ui = struct {
         const dims = term.size();
         var scr = Screen.init(gpa, term.out_fd, dims);
         scr.setSynchronizedOutput(options.synchronized_output);
+        scr.setRepeatSequences(options.repeat_sequences);
         return .{
             .term = term,
             .scr = scr,

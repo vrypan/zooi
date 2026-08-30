@@ -49,3 +49,14 @@ jobs:
       - run: zig build -Dtarget=x86_64-linux-gnu
       - run: zig build -Dtarget=aarch64-macos
       - run: zig build -Dtarget=x86_64-macos
+
+      # Building the libc-free binary proves it links; running it proves the
+      # raw syscalls behave. The runner is x86_64 Linux, so it executes
+      # natively. `script` gives it a pty, without which every terminal check
+      # reports SKIP and the run proves much less.
+      - name: Run the libc-free verifier on real Linux, under a pty
+        run: |
+          zig build-exe verify/zooi-verify.zig \
+            -target x86_64-linux-none -O ReleaseSafe \
+            -femit-bin=verify/zooi-verify-x86_64-linux
+          script -qec verify/zooi-verify-x86_64-linux /dev/null
