@@ -381,4 +381,4 @@ The API may move before v1.0.0. Pin a tag.
 
 ## License
 
-To be added with the first release.
+MIT. See [LICENSE](LICENSE).
