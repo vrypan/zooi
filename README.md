@@ -371,15 +371,29 @@ such as `0 × 0`. `frame()` contains the ANSI bytes from the most recent
 from the previous successful frame. Use the same `Screen` for successive
 models when testing retained rendering.
 
-Use PTY tests for raw mode, the alternate screen, resize events, and restoration.
+Terminal behaviour itself needs a real terminal, and that is the one place
+where unit tests cannot help. zooi's own suite covers it in
+[`test/pty_test.zig`](test/pty_test.zig): raw-mode lifecycle, alternate-screen
+lifecycle, key decoding through a pty, escape timing in both directions,
+resize delivery and coalescing, and restoration after `SIGTERM` and after a
+panic. [`test/pty.zig`](test/pty.zig) is the harness, and it is worth copying
+the one rule it follows — every wait is for a marker the program emits, never
+for a duration. A terminal suite built on sleeps is one everybody learns to
+ignore.
 
 ## Platform support
 
 | Platform | Status | libc |
 |---|---|---|
-| Linux x86_64 | verified on hardware | none |
+| Linux x86_64 | verified on hardware, and on every CI run | none |
 | Linux aarch64 | builds | none |
 | macOS aarch64 / x86_64 | verified | `libSystem` (unavoidable) |
+
+`zig build verify` builds a standalone binary that checks zooi's primitives
+against the machine it runs on and reports PASS/FAIL per check. CI runs it on
+Linux under a pty, built for `x86_64-linux-none`, so each push proves the
+libc-free build both links and runs. On an unusual terminal, run it and paste
+the output.
 
 Cross-compiling requires only Zig:
 

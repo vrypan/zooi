@@ -28,7 +28,10 @@ jobs:
           version: 0.16.0
       - run: zig version
       - run: make fmt-check
+      # `make test` is the whole suite, PTY tests included. Both runners can
+      # allocate a pty; where one cannot, those tests skip rather than fail.
       - run: make test
+      - run: make verify
 
   portability:
     name: Cross-build, and prove Linux needs no libc
@@ -56,7 +59,5 @@ jobs:
       # reports SKIP and the run proves much less.
       - name: Run the libc-free verifier on real Linux, under a pty
         run: |
-          zig build-exe verify/zooi-verify.zig \
-            -target x86_64-linux-none -O ReleaseSafe \
-            -femit-bin=verify/zooi-verify-x86_64-linux
-          script -qec verify/zooi-verify-x86_64-linux /dev/null
+          zig build verify -Dtarget=x86_64-linux-none -Doptimize=ReleaseSafe
+          script -qec zig-out/bin/zooi-verify /dev/null

@@ -1,91 +1,33 @@
-//! zooi-verify — runtime proof that zooi's terminal primitives work on Linux
-//! with no libc linked.
+//! zooi-verify — runtime proof that zooi's terminal primitives work on a given
+//! system, with no libc linked on Linux.
 //!
-//! Every claim in plans/README.md D8 and D14 was established at compile time on
-//! a macOS host. This binary establishes them at run time. It exercises exactly
-//! the syscalls src/sys.zig and src/terminal.zig will use, reports PASS/FAIL
-//! per check, and exits non-zero if any check fails.
+//! Compile-time checks establish that the library builds without libc. This
+//! binary establishes that it *runs*: it drives the real `src/sys.zig`,
+//! `src/terminal.zig`, and `src/input.zig` — not copies of them — reports
+//! PASS/FAIL per check, and exits non-zero if any check fails.
 //!
 //! Build:
-//!   zig build-exe zooi-verify.zig -target x86_64-linux-none -O ReleaseSafe
+//!   zig build verify                          # for this machine
+//!   zig build verify -Dtarget=x86_64-linux-none   # static, no libc
 //!
 //! It needs no arguments. Run it in a terminal for the full suite; run it
 //! piped or under a non-tty and the terminal-dependent checks report SKIP
-//! rather than failing.
+//! rather than failing. Its value is that a user hitting trouble on an unusual
+//! terminal can run one static binary and paste the output.
 
 const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
 
-const Fd = posix.fd_t;
+// The library itself, not a copy of it. An inlined shim would be a second
+// implementation free to drift from the one that ships, and this binary exists
+// to be believed when it disagrees with expectations.
+const internal = @import("zooi_internal");
+const sys = internal.sys;
+const terminal = internal.terminal;
+const input = internal.input;
 
-/// True when std.posix routes through libc. On a -none build this is false and
-/// every call below is a raw syscall.
-const via_libc = posix.system == std.c;
-
-// --- the sys.zig shim under test --------------------------------------------
-
-fn ok(rc: anytype) bool {
-    return posix.errno(rc) == .SUCCESS;
-}
-
-fn sysClose(fd: Fd) void {
-    _ = posix.system.close(fd);
-}
-
-fn sysWrite(fd: Fd, bytes: []const u8) error{WriteFailed}!usize {
-    while (true) {
-        const rc = posix.system.write(fd, bytes.ptr, bytes.len);
-        switch (posix.errno(rc)) {
-            .SUCCESS => return @intCast(rc),
-            .INTR => continue,
-            else => return error.WriteFailed,
-        }
-    }
-}
-
-fn sysWriteAll(fd: Fd, bytes: []const u8) error{WriteFailed}!void {
-    var off: usize = 0;
-    while (off < bytes.len) off += try sysWrite(fd, bytes[off..]);
-}
-
-fn selfPipe() error{PipeFailed}![2]Fd {
-    var fds: [2]Fd = undefined;
-    const has_pipe2 = @hasDecl(posix.system, "pipe2") and
-        @TypeOf(posix.system.pipe2) != void;
-
-    if (has_pipe2) {
-        if (!ok(posix.system.pipe2(&fds, posix.O{ .NONBLOCK = true, .CLOEXEC = true })))
-            return error.PipeFailed;
-        return fds;
-    }
-
-    if (!ok(posix.system.pipe(&fds))) return error.PipeFailed;
-    const nonblock: c_int = @bitCast(@as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
-    for (fds) |f| {
-        const fl = posix.system.fcntl(f, posix.F.GETFL, @as(c_int, 0));
-        if (fl < 0) return error.PipeFailed;
-        if (posix.system.fcntl(f, posix.F.SETFL, fl | nonblock) < 0) return error.PipeFailed;
-        if (posix.system.fcntl(f, posix.F.SETFD, @as(c_int, 1)) < 0) return error.PipeFailed;
-    }
-    return fds;
-}
-
-fn winsize(fd: Fd) error{IoctlFailed}!posix.winsize {
-    var ws: posix.winsize = undefined;
-    if (via_libc) {
-        if (std.c.ioctl(fd, @as(c_int, @bitCast(@as(u32, posix.T.IOCGWINSZ))), &ws) != 0)
-            return error.IoctlFailed;
-    } else {
-        if (!ok(posix.system.ioctl(fd, posix.T.IOCGWINSZ, @intFromPtr(&ws))))
-            return error.IoctlFailed;
-    }
-    return ws;
-}
-
-fn openTty() !Fd {
-    return posix.openatZ(posix.AT.FDCWD, "/dev/tty", .{ .ACCMODE = .RDWR }, 0);
-}
+const Fd = sys.Fd;
 
 var wake_fd: Fd = -1;
 var winch_count: u32 = 0;
@@ -93,7 +35,7 @@ var winch_count: u32 = 0;
 fn onWinch(_: posix.SIG) callconv(.c) void {
     if (wake_fd < 0) return;
     const byte = [_]u8{0};
-    if (via_libc) {
+    if (sys.via_libc) {
         const saved = std.c._errno().*;
         _ = posix.system.write(wake_fd, &byte, 1);
         std.c._errno().* = saved;
@@ -120,7 +62,7 @@ fn emit(comptime fmt: []const u8, args: anytype) void {
 
 fn flush() void {
     if (olen == 0) return;
-    sysWriteAll(1, obuf[0..olen]) catch {};
+    sys.writeAll(1, obuf[0..olen]) catch {};
     olen = 0;
 }
 
@@ -153,7 +95,7 @@ fn expect(name: []const u8, cond: bool, comptime fmt: []const u8, args: anytype)
 
 fn readSmallFile(path: [*:0]const u8, buf: []u8) ?usize {
     const fd = posix.openatZ(posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY }, 0) catch return null;
-    defer sysClose(fd);
+    defer sys.close(fd);
     var total: usize = 0;
     while (total < buf.len) {
         const n = posix.read(fd, buf[total..]) catch return null;
@@ -172,7 +114,7 @@ fn checkBuildConfig() void {
     });
     emit("  link_libc={} posix.system={s}\r\n", .{
         builtin.link_libc,
-        if (via_libc) "std.c" else "std.os.linux (raw syscalls)",
+        if (sys.via_libc) "std.c" else "std.os.linux (raw syscalls)",
     });
 
     if (builtin.os.tag == .linux) {
@@ -212,17 +154,17 @@ fn checkNoLibcMapped() void {
 }
 
 fn checkPipe() void {
-    const p = selfPipe() catch {
+    const p = sys.selfPipe() catch {
         fail("pipe2 O_NONBLOCK|O_CLOEXEC", "syscall failed", .{});
         return;
     };
     defer {
-        sysClose(p[0]);
-        sysClose(p[1]);
+        sys.close(p[0]);
+        sys.close(p[1]);
     }
     pass("pipe2 O_NONBLOCK|O_CLOEXEC", "read={d} write={d}", .{ p[0], p[1] });
 
-    sysWriteAll(p[1], "x") catch {
+    sys.writeAll(p[1], "x") catch {
         fail("write/read round trip", "write failed", .{});
         return;
     };
@@ -245,7 +187,7 @@ fn checkPipe() void {
     // CLOEXEC, checked directly rather than by spawning. fcntl's signature
     // differs between the two backends: variadic and signed under libc, a
     // usize-arg syscall without it.
-    const fd_flags: i64 = if (via_libc)
+    const fd_flags: i64 = if (sys.via_libc)
         @intCast(std.c.fcntl(p[0], posix.F.GETFD, @as(c_int, 0)))
     else
         @bitCast(@as(u64, posix.system.fcntl(p[0], posix.F.GETFD, @as(usize, 0))));
@@ -260,13 +202,13 @@ fn checkPipe() void {
 /// The check most likely to fail on a libc-free build: rt_sigaction needs a
 /// restorer trampoline that libc normally supplies.
 fn checkSignals() void {
-    const p = selfPipe() catch {
+    const p = sys.selfPipe() catch {
         fail("sigaction installs handler", "pipe failed", .{});
         return;
     };
     defer {
-        sysClose(p[0]);
-        sysClose(p[1]);
+        sys.close(p[0]);
+        sys.close(p[1]);
     }
     wake_fd = p[1];
     defer wake_fd = -1;
@@ -325,13 +267,13 @@ fn checkSignals() void {
 }
 
 fn checkPollTimeout() void {
-    const p = selfPipe() catch {
+    const p = sys.selfPipe() catch {
         fail("poll honours finite timeout", "pipe failed", .{});
         return;
     };
     defer {
-        sysClose(p[0]);
-        sysClose(p[1]);
+        sys.close(p[0]);
+        sys.close(p[1]);
     }
     // This is the escape-disambiguation path: a finite timeout with no input.
     var fds = [_]posix.pollfd{.{ .fd = p[0], .events = posix.POLL.IN, .revents = 0 }};
@@ -365,7 +307,7 @@ fn checkUtf8() void {
 }
 
 fn checkTerminal() void {
-    const fd = openTty() catch {
+    const fd = sys.openTty() catch {
         skip("open /dev/tty", "no controlling terminal", .{});
         skip("TIOCGWINSZ", "no terminal", .{});
         skip("tcgetattr", "no terminal", .{});
@@ -374,10 +316,10 @@ fn checkTerminal() void {
         skip("ANSI write to terminal", "no terminal", .{});
         return;
     };
-    defer sysClose(fd);
+    defer sys.close(fd);
     pass("open /dev/tty", "fd={d}", .{fd});
 
-    if (winsize(fd)) |ws| {
+    if (sys.winsize(fd)) |ws| {
         // 0x0 is legal (a pty with no dimensions set) and must not be an error.
         pass("TIOCGWINSZ", "{d} rows x {d} cols", .{ ws.row, ws.col });
     } else |_| {
@@ -389,33 +331,18 @@ fn checkTerminal() void {
     const saved = posix.tcgetattr(fd) catch {
         fail("tcgetattr", "failed", .{});
         skip("raw mode applies", "no saved termios", .{});
+        skip("ANSI write to terminal", "no saved termios", .{});
         skip("termios restored", "no saved termios", .{});
         return;
     };
     pass("tcgetattr", "saved original attributes", .{});
 
-    var raw = saved;
-    raw.iflag.IGNBRK = false;
-    raw.iflag.BRKINT = false;
-    raw.iflag.PARMRK = false;
-    raw.iflag.ISTRIP = false;
-    raw.iflag.INLCR = false;
-    raw.iflag.IGNCR = false;
-    raw.iflag.ICRNL = false;
-    raw.iflag.IXON = false;
-    raw.oflag.OPOST = false;
-    raw.lflag.ECHO = false;
-    raw.lflag.ECHONL = false;
-    raw.lflag.ICANON = false;
-    raw.lflag.ISIG = false;
-    raw.lflag.IEXTEN = false;
-    raw.cflag.PARENB = false;
-    raw.cflag.CSIZE = .CS8;
-    raw.cc[@intFromEnum(posix.V.MIN)] = 1;
-    raw.cc[@intFromEnum(posix.V.TIME)] = 0;
-
-    posix.tcsetattr(fd, .NOW, raw) catch {
-        fail("raw mode applies", "tcsetattr failed", .{});
+    // The real lifecycle, on the descriptor just opened. No alternate screen:
+    // this runs in the user's shell and must not wipe what is on it.
+    var term = terminal.Terminal.init(.{ .tty = fd, .alternate_screen = false }) catch {
+        fail("raw mode applies", "Terminal.init failed", .{});
+        skip("ANSI write to terminal", "no terminal", .{});
+        skip("termios restored", "no terminal", .{});
         return;
     };
 
@@ -426,38 +353,36 @@ fn checkTerminal() void {
             !now.lflag.ISIG and !now.oflag.OPOST;
         expect("raw mode applies", is_raw, "ECHO/ICANON/ISIG/OPOST all off", .{});
     } else |_| {
-        fail("raw mode applies", "tcgetattr after set failed", .{});
+        fail("raw mode applies", "tcgetattr after Terminal.init failed", .{});
     }
 
     // A frame's worth of ANSI, written the way Screen.present will.
     const frame = "\x1b[s\x1b[1;1H\x1b[7m zooi \x1b[0m\x1b[u";
-    if (sysWriteAll(fd, frame)) {
+    if (sys.writeAll(term.out_fd, frame)) {
         pass("ANSI write to terminal", "{d} bytes in one write", .{frame.len});
     } else |_| {
         fail("ANSI write to terminal", "write failed", .{});
     }
 
-    posix.tcsetattr(fd, .DRAIN, saved) catch {
-        fail("termios restored", "tcsetattr failed", .{});
-        return;
-    };
+    term.deinit();
     if (posix.tcgetattr(fd)) |back| {
         const restored = back.lflag.ECHO == saved.lflag.ECHO and
             back.lflag.ICANON == saved.lflag.ICANON and
+            back.lflag.ISIG == saved.lflag.ISIG and
             back.oflag.OPOST == saved.oflag.OPOST;
         expect("termios restored", restored, "matches the saved attributes", .{});
     } else |_| {
-        fail("termios restored", "tcgetattr after restore failed", .{});
+        fail("termios restored", "tcgetattr after Terminal.deinit failed", .{});
     }
 }
 
 /// Optional: decodes one real keypress. Skipped unless stdin is a terminal.
 fn checkInteractiveKey() void {
-    const fd = openTty() catch {
+    const fd = sys.openTty() catch {
         skip("decode a real keypress", "no terminal", .{});
         return;
     };
-    defer sysClose(fd);
+    defer sys.close(fd);
 
     const saved = posix.tcgetattr(fd) catch {
         skip("decode a real keypress", "no termios", .{});
@@ -494,12 +419,46 @@ fn checkInteractiveKey() void {
         return;
     }
     const seq = b[0..got];
-    const is_up = std.mem.eql(u8, seq, "\x1b[A") or std.mem.eql(u8, seq, "\x1bOA");
-    if (is_up) {
-        pass("decode a real keypress", "{d} bytes -> Up", .{got});
+
+    // Decoded by the parser that ships, so a disagreement here is a real
+    // disagreement. The bytes are printed either way: on the first hardware
+    // run this check reported "not Up" and it took a second run to establish
+    // that the key had been mistyped rather than the decoder broken. A
+    // diagnostic that cannot tell those apart costs a round trip every time it
+    // is wrong, and this binary exists to be believed.
+    var parser: input.Parser = .{};
+    _ = parser.feed(seq);
+    const decoded = parser.next();
+
+    var hex: [3 * 32]u8 = undefined;
+    var used: usize = 0;
+    for (seq, 0..) |byte, i| {
+        const part = std.fmt.bufPrint(hex[used..], "{s}{x:0>2}", .{
+            if (i == 0) "" else " ", byte,
+        }) catch break;
+        used += part.len;
+    }
+    const bytes_shown = hex[0..used];
+
+    if (decoded) |key| {
+        if (key == .up) {
+            pass("decode a real keypress", "{d} bytes ({s}) -> up", .{ got, bytes_shown });
+        } else if (key == .character) {
+            // Not a failure: any key proves the read and decode path works.
+            pass("decode a real keypress", "{d} bytes ({s}) -> character U+{X:0>4}", .{
+                got, bytes_shown, key.character,
+            });
+        } else {
+            pass("decode a real keypress", "{d} bytes ({s}) -> {s}", .{
+                got, bytes_shown, @tagName(key),
+            });
+        }
     } else {
-        // Not a failure: any key proves the read path works.
-        pass("decode a real keypress", "{d} bytes read (not Up, but input works)", .{got});
+        // Not a failure. An unbound control byte, or the leading half of a
+        // sequence, legitimately produces no key — and a run with no terminal
+        // behind it reads EOF as 0x04. The bytes are printed so the reader can
+        // tell that apart from a decoder that is actually broken.
+        skip("decode a real keypress", "{d} bytes ({s}) produced no key", .{ got, bytes_shown });
     }
 }
 

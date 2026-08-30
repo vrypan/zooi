@@ -519,6 +519,20 @@ const both_style: zooi.Style = .{ .reverse = true, .fg = .{ .ansi = 6 } };
 const fail_style: zooi.Style = .{ .fg = .{ .ansi = 1 } };
 const meta_style: zooi.Style = .{ .fg = .{ .ansi = 4 } };
 
+/// Test affordance, not a library feature: with `ZOOI_EXAMPLE_MARKERS` set,
+/// announce every painted frame on stderr. The PTY suite waits for a marker
+/// instead of sleeping, which is the whole difference between a terminal test
+/// that can be trusted and one that cannot. Stderr, never stdout — stdout is
+/// the interface under test.
+var markers_enabled: bool = false;
+var frames_painted: usize = 0;
+
+fn finishFrame(screen: *zooi.Screen) void {
+    screen.present() catch {};
+    frames_painted += 1;
+    if (markers_enabled) std.debug.print("[zooi-frame {d}]\n", .{frames_painted});
+}
+
 pub fn render(m: *const Model, screen: *zooi.Screen) void {
     screen.begin();
 
@@ -526,20 +540,20 @@ pub fn render(m: *const Model, screen: *zooi.Screen) void {
     if (m.size.rows < 3 or m.size.cols < 20) {
         screen.move(0, 0);
         screen.write("terminal too small");
-        screen.present() catch {};
+        finishFrame(screen);
         return;
     }
 
     if (m.mode == .inspect) {
         renderInspect(m, screen);
-        screen.present() catch {};
+        finishFrame(screen);
         return;
     }
 
     renderHeader(m, screen);
     renderList(m, screen);
     renderFooter(m, screen);
-    screen.present() catch {};
+    finishFrame(screen);
 }
 
 fn renderHeader(m: *const Model, screen: *zooi.Screen) void {
@@ -717,10 +731,12 @@ fn onTerm(_: std.posix.SIG) callconv(.c) void {
     std.process.exit(130);
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init.Minimal) !void {
     var debug: std.heap.DebugAllocator(.{}) = .init;
     defer _ = debug.deinit();
     const gpa = debug.allocator();
+
+    markers_enabled = init.environ.getPosix("ZOOI_EXAMPLE_MARKERS") != null;
 
     var ui = zooi.Ui.init(gpa, .{}) catch |err| {
         std.debug.print("zooi: {s}\n", .{@errorName(err)});
@@ -749,6 +765,16 @@ pub fn main() !void {
         var pending: ?zooi.Event = first;
         var handled: usize = 0;
         while (pending) |ev| {
+            // Hidden behind the marker flag, so a user cannot reach it: the
+            // PTY suite needs the example to die abnormally on demand to check
+            // that the terminal still comes back.
+            if (markers_enabled) switch (ev) {
+                .key => |k| switch (k) {
+                    .character => |ch| if (ch == '!') @panic("example panic on request"),
+                    else => {},
+                },
+                else => {},
+            };
             const effect = update(&model, .{ .terminal = ev });
             if (executeEffect(&model, effect)) |follow_up| {
                 _ = update(&model, follow_up);
