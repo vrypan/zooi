@@ -1,9 +1,8 @@
 # zooi
 
-A small Zig library for building keyboard-driven, full-screen terminal
-programs. It owns the terminal — raw mode, the alternate screen, resize
-notification, key decoding, and a retained frame — and nothing else. Your
-application owns its state, its key bindings, and its rendering.
+zooi is a small Zig library for keyboard-driven, full-screen terminal programs.
+It handles raw mode, the alternate screen, resize events, key decoding, and
+retained rendering. The application handles state, key bindings, and layout.
 
 ```
 ┌─ journal pqhx ────────────────────────────────────────────────────┐
@@ -18,33 +17,26 @@ application owns its state, its key bindings, and its rendering.
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-## Is zooi the right choice?
+## When to use zooi
 
-zooi is deliberately small. It gives you an event loop, a screen buffer, and
-styled text. That is the whole library.
+zooi provides an event loop, a screen buffer, and styled text.
 
-**Use zooi if** you are building something like a list browser, a picker, a log
-viewer, or a small dashboard: one screen, keyboard input, immediate-mode
-rendering, and you would rather write your own layout than learn someone else's.
+Use zooi for small programs such as list browsers, pickers, log viewers, and
+dashboards. It works best for a single screen with keyboard input and custom
+layout code.
 
-**Use [libvaxis](https://github.com/rockorager/libvaxis) instead if** you need a
-widget tree, a layout engine, mouse interaction, terminal graphics, capability
-negotiation, or a component ecosystem. zooi does not compete with it and will
-not grow toward it — see [Non-goals](#non-goals).
-
-zooi should stay small enough that you can read the library itself when its
-behavior surprises you.
+Use [libvaxis](https://github.com/rockorager/libvaxis) if you need widgets, a
+layout engine, mouse input, terminal graphics, capability negotiation, or a
+component library. See [Non-goals](#non-goals).
 
 ## Requirements
 
 - Zig **0.16.0**
-- No third-party dependencies, ever
-- **No libc on Linux.** Every syscall goes through `std.posix`, or through raw
-  `std.os.linux` syscalls where 0.16's `std.posix` has no wrapper. On macOS,
-  `libSystem` is linked because Apple provides no other supported interface.
+- No third-party dependencies
+- No libc on Linux. Calls use `std.posix` or `std.os.linux` when Zig has no
+  POSIX wrapper. macOS uses `libSystem`.
 
-zooi never calls `linkLibC()` itself. If your program links libc for its own
-reasons, zooi follows that choice rather than overriding it.
+zooi does not call `linkLibC()`. If the application links libc, zooi uses it.
 
 ## Install
 
@@ -54,32 +46,30 @@ Add the dependency:
 zig fetch --save git+https://github.com/vrypan/zooi.git#v0.1.0
 ```
 
-Then wire it into `build.zig`:
+Add the module in `build.zig`:
 
 ```zig
 const zooi = b.dependency("zooi", .{});
 exe.root_module.addImport("zooi", zooi.module("zooi"));
 ```
 
-To vendor instead, copy `src/` and point a module at `src/zooi.zig`. There are
-no dependencies to bring along.
+To vendor zooi, copy `src/` and use `src/zooi.zig` as the module root.
 
 ## Try it
 
-The repository ships a worked example — a list browser with selection, prompts,
-a confirmation, and an inspect view:
+Run the example browser:
 
 ```sh
 zig build run
 ```
 
-`j`/`k` or the arrows move, `space` selects, `v` starts a range, `p` pins,
-`t` tags, `n` names, `d` deletes, `Enter` inspects, `q` quits. Resize the
-window while it runs. The source is `examples/browser.zig`.
+Use `j`/`k` or the arrow keys to move. `space` selects, `v` starts a range,
+`p` pins, `t` tags, `n` names, `d` deletes, `Enter` inspects, and `q` quits.
+The source is `examples/browser.zig`.
 
 ## Quick start
 
-A complete program. It draws a list, moves a cursor, and quits on `q`:
+This program draws a list, moves a cursor, and quits on `q`:
 
 ```zig
 const std = @import("std");
@@ -130,19 +120,15 @@ fn render(ui: *zooi.Ui, cursor: usize) void {
 }
 ```
 
-Two things to notice, because they shape everything else:
+Screen drawing functions return `void`. `present()` returns the first drawing
+or output error. This keeps error handling out of layout code.
 
-`render` returns `void` and takes no error. Screen writes cannot fail
-individually — the first failure is recorded and returned by `present()`. That
-keeps layout code free of `try` on every line and, more importantly, makes
-`render` callable from a unit test with no terminal and no error handling.
-
-The loop is yours. zooi hands you one event at a time and blocks in between; it
-never calls you back and never owns your control flow.
+The application owns the loop. `nextEvent()` returns one event and blocks when
+there is no input.
 
 ## API
 
-Nine public items.
+The public API has nine items.
 
 ### `Ui`
 
@@ -156,9 +142,8 @@ pub fn size(self: *const Ui) Size
 pub fn nextEvent(self: *Ui) !?Event
 ```
 
-`nextEvent` blocks until a key is pressed or the terminal is resized. It
-returns `null` when the input stream ends, which for a terminal means the
-session is over.
+`nextEvent` blocks until a key is pressed or the terminal is resized. It returns
+`null` when the input stream ends.
 
 ```zig
 pub const Options = struct {
@@ -170,16 +155,14 @@ pub const Options = struct {
 };
 ```
 
-zooi picks its own descriptors so `yourprog > log` and `yourprog | head` do
-not paint the interface into a pipe or read keystrokes from a file. Input and
-output are chosen separately: input prefers an inherited terminal among
-stdin/stderr, output prefers stdout, and `/dev/tty` is the fallback for either.
+Input and output descriptors are selected separately. Input prefers a terminal
+on stdin or stderr. Output prefers stdout, then stderr. `/dev/tty` is the
+fallback. This prevents redirected output from receiving terminal control
+sequences.
 
-Input avoids `/dev/tty` where it can because of a macOS defect — `poll()`
-returns `POLLNVAL` for a freshly-opened `/dev/tty`, while polling an inherited
-terminal works. Output is never polled, so `/dev/tty` is safe there. A program
-with *both* stdin and stderr redirected away from a terminal falls back to
-`/dev/tty` for input and will not receive keys on macOS; on Linux it works.
+On macOS, `poll()` returns `POLLNVAL` for a newly opened `/dev/tty`. zooi
+therefore prefers an inherited terminal for input. If both stdin and stderr are
+redirected, `/dev/tty` input does not work on macOS. It works on Linux.
 
 ### `Event` and `Size`
 
@@ -192,11 +175,9 @@ pub const Event = union(enum) {
 pub const Size = struct { rows: u16, cols: u16 };
 ```
 
-Resize events are coalesced: dragging a window emits one event per settled
-size, not one per notification, and no event at all if the size did not
-actually change. Both `rows` and `cols` may legitimately be `0` on some
-terminals — zooi reports the truth and clips accordingly rather than pretending
-otherwise.
+Repeated resize notifications are coalesced. No event is returned if the size
+did not change. `rows` and `cols` may be `0`; rendering clips to the reported
+size.
 
 ### `Key`
 
@@ -211,16 +192,14 @@ pub const Key = union(enum) {
 };
 ```
 
-`character` is printable text only, decoded from UTF-8, so a prompt can append
-it to a buffer without filtering. Control bytes other than the ones named above
-are dropped rather than surfaced.
+`character` contains one printable Unicode codepoint decoded from UTF-8. Other
+control bytes are dropped.
 
-**`ctrl_c` is a key, not a signal.** zooi disables `ISIG`, so Ctrl-C arrives
-here for you to interpret. Handle it or your program cannot be quit that way.
+zooi disables `ISIG`, so Ctrl-C is returned as `ctrl_c` instead of raising a
+signal. Applications must handle it.
 
-Both `ESC [ A` and `ESC O A` forms are decoded for arrows and Home/End, because
-terminals disagree, and a multiplexer may leave cursor-key application mode set
-even though zooi never enables it.
+Both CSI (`ESC [ A`) and SS3 (`ESC O A`) forms are supported for arrows,
+Home, and End.
 
 ### `Screen`
 
@@ -239,9 +218,8 @@ size: Size    // field: current terminal dimensions
 Rows and columns are **0-based**. `begin()` starts a frame, `present()` writes
 the changed cells to the terminal in a single write.
 
-`showCursor` marks where the terminal cursor should be left when the frame is
-presented — use it for text prompts. A frame that never calls it presents with
-the cursor hidden.
+`showCursor` sets the cursor position for `present()`. If it is not called, the
+cursor stays hidden.
 
 ### `Style` and `Color`
 
@@ -263,8 +241,8 @@ pub const Color = union(enum) {
 };
 ```
 
-`null` means the terminal's default, which is not the same as any specific
-color. Prefer `.ansi` where you can: it respects the palette the user chose.
+`null` uses the terminal's default color. `.ansi` uses the terminal's configured
+16-color palette.
 
 ### `displayWidth()`
 
@@ -272,10 +250,9 @@ color. Prefer `.ansi` where you can: it respects the palette the user chose.
 pub fn displayWidth(text: []const u8) usize
 ```
 
-Columns a string occupies, which is not its byte length. zooi clips for you,
-but laying out columns is your job and cannot be done by counting bytes: `é` is
-two bytes and one column, `世` three bytes and two, a combining mark two bytes
-and none. Per-codepoint; see [Non-goals](#non-goals) for what that excludes.
+Returns the number of terminal columns used by a string. For example, `é` uses
+one column, `世` uses two, and a combining mark uses none. Width is calculated
+per codepoint; see [Non-goals](#non-goals).
 
 ### `restore()`
 
@@ -283,50 +260,36 @@ and none. Per-codepoint; see [Non-goals](#non-goals) for what that excludes.
 pub fn restore() void
 ```
 
-Restores the terminal from a panic handler or a fatal-signal handler.
-Allocation-free, async-signal-safe, and a no-op when no `Ui` is active. See
-[Terminal restoration](#terminal-restoration).
+Restores terminal state. It is allocation-free, async-signal-safe, and does
+nothing when no `Ui` is active. See [Terminal restoration](#terminal-restoration).
 
 ## Rendering model
 
-Redraw everything logically, every frame. `Screen` retains front and back cell
-grids, compares them at `present()`, and emits only changed row spans. Your
-render function therefore stays stateless and immediate-mode, while moving a
-cursor normally repaints two rows instead of the whole terminal.
+Draw the full logical frame between `begin()` and `present()`. `Screen` compares
+front and back cell grids and writes only changed row spans. Moving a cursor
+usually updates two rows.
 
-The grids, Unicode text arenas, and ANSI output buffer are reused between
-frames, so steady-state rendering does not allocate. A resize invalidates the
-old coordinates and causes one complete repaint from a cleared screen.
+The grids, text storage, and ANSI output buffer are reused. Steady-state frames
+do not allocate. A resize clears and repaints the screen once.
 
-**Clipping is automatic and measured in columns, not bytes.** Text is truncated
-to the terminal width using display width, so `é` counts as one column and `世`
-as two. A wide character that would straddle the right edge is dropped and the
-leftover column is filled with a space, because emitting half of one corrupts
-the terminal's own column tracking for the rest of the line. Writes to rows
-beyond the screen produce nothing. Control bytes and newlines in your text are
-dropped — a string from an external source cannot break the frame.
+Clipping uses terminal columns, not byte length. Text past the right edge is
+truncated. A wide character that would cross the edge is replaced with a space.
+Writes outside the screen are ignored. Control bytes, malformed UTF-8, and
+newlines are dropped.
 
-You still decide what to do when the terminal is too small. zooi guarantees
-only that it will clip rather than fail; showing a "window too small" message
-is your call.
+The application decides how to handle a terminal that is too small.
 
 ## Terminal restoration
 
-Leaving a user's shell in raw mode with no echo is the worst thing a TUI can
-do, so this is treated as a correctness requirement rather than a nicety.
-
-`deinit()` restores everything — the alternate screen, the cursor, and the
-original termios — and is safe on every error path:
+`deinit()` restores the alternate screen, cursor, and original termios:
 
 ```zig
 var ui = try zooi.Ui.init(gpa, .{});
 defer ui.deinit();
 ```
 
-That covers normal returns and errors. It does **not** cover panics or fatal
-signals, and zooi deliberately does not install handlers for those: choosing a
-signal policy is a program-wide decision a library should not make for you.
-Wire it up yourself:
+This handles normal returns and errors. For panics, call `restore()` from a
+panic handler:
 
 ```zig
 pub const panic = std.debug.FullPanic(struct {
@@ -337,13 +300,12 @@ pub const panic = std.debug.FullPanic(struct {
 }.f);
 ```
 
-Do the same from a `SIGTERM` or `SIGHUP` handler if your program handles them.
+Call `restore()` from `SIGTERM` or `SIGHUP` handlers as well, if present.
 
 ## Testing without a terminal
 
-Most of a TUI's behavior is a pure function, and zooi is shaped so you can test
-it that way. Keep your state transitions in an `update` function and your
-drawing in a `render` function, and neither needs a terminal:
+Keep state changes in an `update` function and drawing in a `render` function.
+Both can be tested without a terminal:
 
 ```zig
 test "cursor stops at the end of the list" {
@@ -354,16 +316,13 @@ test "cursor stops at the end of the list" {
 }
 ```
 
-Because `render` cannot fail and takes a `*Screen`, you can render a model at a
-fixed size and assert on the bytes produced — including at awkward sizes like
-`0 × 0` — without opening a terminal at all. `frame()` contains the ANSI bytes
-emitted by the most recent `present()`: the first frame is a complete paint,
-while later frames contain only differences from the preceding successful
-frame. Present successive models through the same `Screen` when testing
-retained-rendering behavior.
+Render at a fixed size and inspect `frame()` to test output, including sizes
+such as `0 × 0`. `frame()` contains the ANSI bytes from the most recent
+`present()`. The first frame paints the screen; later frames contain changes
+from the previous successful frame. Use the same `Screen` for successive
+models when testing retained rendering.
 
-That leaves genuinely terminal-specific behavior (raw mode, alternate screen,
-resize, restoration) for a PTY test, which is a much smaller set.
+Use PTY tests for raw mode, the alternate screen, resize events, and restoration.
 
 ## Platform support
 
@@ -373,40 +332,33 @@ resize, restoration) for a PTY test, which is a much smaller set.
 | Linux aarch64 | builds | none |
 | macOS aarch64 / x86_64 | verified | `libSystem` (unavoidable) |
 
-Cross-compiling needs nothing but Zig — no sysroot, no toolchain, no libc
-headers:
+Cross-compiling requires only Zig:
 
 ```sh
 zig build -Dtarget=x86_64-linux-none      # static, no libc
 zig build -Dtarget=aarch64-macos
 ```
 
-The ABI in a target triple does not decide libc linkage; `-lc` and
-`linkLibC()` do. `-Dtarget=x86_64-linux-gnu` without `-lc` is equally libc-free.
-`-none` is simply the spelling that cannot be weakened later.
+The target ABI does not enable libc by itself. `-lc` or `linkLibC()` enables it.
+For example, `-Dtarget=x86_64-linux-gnu` without `-lc` is libc-free.
 
 ## Non-goals
 
-zooi will not grow a widget hierarchy, layout containers, focus propagation,
-mouse support, clipboard integration, terminal graphics, async jobs, background
-workers, filesystem watching, plugins, configurable themes, user-defined
-keybindings, or multiple panes.
+zooi does not provide widgets, layout containers, focus management, mouse or
+clipboard input, terminal graphics, async jobs, background workers, filesystem
+watching, plugins, themes, configurable key bindings, or multiple panes.
 
-Known limits worth stating plainly:
+Known limits:
 
 - **Unicode width is per-codepoint.** Combining marks and East Asian widths are
   handled; grapheme clusters, ZWJ emoji sequences, and variation selectors are
   not. A family emoji built from several people and ZWJs will measure wrong.
-- **The retained grid is an output optimization, not application state.** It
-  is deliberately not queryable; your model remains the source of truth.
+- **The retained grid is not application state.** It cannot be queried.
 - **Single-threaded.** All rendering and all state changes happen on the loop.
-
-If you need something on that list, you have outgrown zooi, and that is a fine
-outcome — reach for libvaxis.
 
 ## Versioning
 
-0.1.0 is the first release. The API may move before 1.0.0; pin the `v0.1.0`
+0.1.0 is the first release. The API may change before 1.0.0. Pin the `v0.1.0`
 tag for reproducible builds.
 
 ## License
