@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
     // One test root per concern. Adding a module means adding a file here.
     const roots = [_][]const u8{
         "src/zooi_test.zig",
+        "src/width_test.zig",
     };
     for (roots) |root| {
         const test_mod = b.createModule(.{
