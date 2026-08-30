@@ -18,6 +18,14 @@ pub const Style = @import("screen.zig").Style;
 pub const Color = @import("screen.zig").Color;
 pub const restore = @import("terminal.zig").restore;
 
+/// Columns a UTF-8 string occupies in a terminal, which is not its byte
+/// length. Exported because laying out columns is the application's job and
+/// it cannot be done by measuring bytes: `é` is two bytes and one column,
+/// `世` three bytes and two, a combining mark two bytes and none.
+///
+/// Per-codepoint. Grapheme clusters and ZWJ emoji sequences are out of scope.
+pub const displayWidth = @import("width.zig").strWidth;
+
 test {
     std.testing.refAllDecls(@This());
 }

@@ -70,6 +70,19 @@ exe.root_module.addImport("zooi", zooi.module("zooi"));
 To vendor instead, copy `src/` and point a module at `src/zooi.zig`. There are
 no dependencies to bring along.
 
+## Try it
+
+The repository ships a worked example — a list browser with selection, prompts,
+a confirmation, and an inspect view:
+
+```sh
+zig build run
+```
+
+`j`/`k` or the arrows move, `space` selects, `v` starts a range, `p` pins,
+`t` tags, `n` names, `d` deletes, `Enter` inspects, `q` quits. Resize the
+window while it runs. The source is `examples/browser.zig`.
+
 ## Quick start
 
 A complete program. It draws a list, moves a cursor, and quits on `q`:
@@ -135,7 +148,7 @@ never calls you back and never owns your control flow.
 
 ## API
 
-Eight public items.
+Nine public items.
 
 ### `Ui`
 
@@ -258,6 +271,17 @@ pub const Color = union(enum) {
 
 `null` means the terminal's default, which is not the same as any specific
 color. Prefer `.ansi` where you can: it respects the palette the user chose.
+
+### `displayWidth()`
+
+```zig
+pub fn displayWidth(text: []const u8) usize
+```
+
+Columns a string occupies, which is not its byte length. zooi clips for you,
+but laying out columns is your job and cannot be done by counting bytes: `é` is
+two bytes and one column, `世` three bytes and two, a combining mark two bytes
+and none. Per-codepoint; see [Non-goals](#non-goals) for what that excludes.
 
 ### `restore()`
 
