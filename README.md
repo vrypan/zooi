@@ -1,14 +1,8 @@
 # zooi
 
-> [!WARNING]
-> **NOT YET IMPLEMENTED**
->
-> This document is the design contract for zooi v0.1.0, written before the
-> code. Nothing here is fetchable yet, and details may change as it is built.
-
 A small Zig library for building keyboard-driven, full-screen terminal
 programs. It owns the terminal — raw mode, the alternate screen, resize
-notification, key decoding, and a buffered frame — and nothing else. Your
+notification, key decoding, and a retained frame — and nothing else. Your
 application owns its state, its key bindings, and its rendering.
 
 ```
@@ -362,7 +356,11 @@ test "cursor stops at the end of the list" {
 
 Because `render` cannot fail and takes a `*Screen`, you can render a model at a
 fixed size and assert on the bytes produced — including at awkward sizes like
-`0 × 0` — without opening a terminal at all.
+`0 × 0` — without opening a terminal at all. `frame()` contains the ANSI bytes
+emitted by the most recent `present()`: the first frame is a complete paint,
+while later frames contain only differences from the preceding successful
+frame. Present successive models through the same `Screen` when testing
+retained-rendering behavior.
 
 That leaves genuinely terminal-specific behavior (raw mode, alternate screen,
 resize, restoration) for a PTY test, which is a much smaller set.
@@ -408,8 +406,8 @@ outcome — reach for libvaxis.
 
 ## Versioning
 
-v0.1.0 is a first release with one consumer that has not yet used it in anger.
-The API may move before v1.0.0. Pin a tag.
+0.1.0 is the first release. The API may move before 1.0.0; pin the `v0.1.0`
+tag for reproducible builds.
 
 ## License
 
