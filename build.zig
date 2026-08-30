@@ -14,6 +14,7 @@ pub fn build(b: *std.Build) void {
     const roots = [_][]const u8{
         "src/zooi_test.zig",
         "src/width_test.zig",
+        "src/input_test.zig",
     };
     for (roots) |root| {
         const test_mod = b.createModule(.{

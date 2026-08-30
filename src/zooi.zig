@@ -9,6 +9,8 @@
 
 const std = @import("std");
 
+pub const Key = @import("input.zig").Key;
+
 test {
     std.testing.refAllDecls(@This());
 }
