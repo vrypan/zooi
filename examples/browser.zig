@@ -581,6 +581,21 @@ fn renderList(m: *const Model, screen: *zooi.Screen) void {
         else
             .{};
 
+        // Reverse video must cover the row, not stop after the command text.
+        // Prefill before drawing the content so the retained grid keeps the
+        // cursor style in every trailing cell. Chunking handles terminals
+        // wider than the fixed stack buffer without allocating.
+        if (is_cursor) {
+            var spaces: [256]u8 = @splat(' ');
+            var left: usize = m.size.cols;
+            while (left > 0) {
+                const n = @min(left, spaces.len);
+                screen.writeStyled(spaces[0..n], style);
+                left -= n;
+            }
+            screen.move(@intCast(row + 1), 0);
+        }
+
         var buf: [256]u8 = undefined;
         const head = std.fmt.bufPrint(&buf, "{s}{s}{s} {d: >4} ", .{
             if (is_cursor) ">" else " ",

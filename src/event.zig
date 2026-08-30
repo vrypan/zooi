@@ -126,7 +126,16 @@ pub const Ui = struct {
 
             if (fds[0].revents & posix.POLL.IN != 0) {
                 var buf: [1024]u8 = undefined;
-                const n = posix.read(self.term.in_fd, &buf) catch |err| switch (err) {
+                // The kernel may have accumulated many complete keys while
+                // the application rendered the previous event. Read only
+                // what the parser can retain; reading the whole available
+                // burst and passing it to a smaller parser would discard it.
+                // A full parser contains one overlong, incomplete sequence;
+                // reading one more byte deliberately takes feed's overflow
+                // recovery path and lets the stream resynchronise.
+                const room = self.parser.feedCapacity();
+                const read_len = if (room == 0) 1 else @min(room, buf.len);
+                const n = posix.read(self.term.in_fd, buf[0..read_len]) catch |err| switch (err) {
                     error.WouldBlock => continue,
                     else => return error.ReadFailed,
                 };

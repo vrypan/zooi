@@ -95,6 +95,19 @@ test "several keys in one read are drained before polling again" {
     try expectEqual(event.Event{ .key = .down }, (try f.ui.nextEvent()).?);
 }
 
+test "an input burst larger than the parser buffer loses no keys" {
+    var f = try Fixture.init(25);
+    defer f.deinit();
+
+    // Twenty arrows are 60 bytes. The parser intentionally stays small and
+    // inline, so the event loop must split this kernel read into chunks.
+    const burst = "\x1b[B" ** 20;
+    try f.send(burst);
+    for (0..20) |_| {
+        try expectEqual(event.Event{ .key = .down }, (try f.ui.nextEvent()).?);
+    }
+}
+
 test "a lone ESC becomes Escape once the timeout expires" {
     var f = try Fixture.init(5);
     defer f.deinit();

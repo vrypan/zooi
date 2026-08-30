@@ -52,6 +52,15 @@ pub const Parser = struct {
     buf: [32]u8 = undefined,
     len: usize = 0,
 
+    /// Bytes that can be appended without overflowing the parser.
+    ///
+    /// The event loop uses this to bound each terminal read. A read is a
+    /// chunk of the byte stream, not one key, so it may contain far more than
+    /// the buffer can hold even though every individual key is small.
+    pub fn feedCapacity(self: *const Parser) usize {
+        return self.buf.len - self.len;
+    }
+
     /// Append bytes read from the terminal.
     ///
     /// Returns false if they would overflow the buffer, in which case the

@@ -30,8 +30,8 @@ zooi is deliberately small. It gives you an event loop, a screen buffer, and
 styled text. That is the whole library.
 
 **Use zooi if** you are building something like a list browser, a picker, a log
-viewer, or a small dashboard: one screen, keyboard input, full redraws, and you
-would rather write your own layout than learn someone else's.
+viewer, or a small dashboard: one screen, keyboard input, immediate-mode
+rendering, and you would rather write your own layout than learn someone else's.
 
 **Use [libvaxis](https://github.com/rockorager/libvaxis) instead if** you need a
 widget tree, a layout engine, mouse interaction, terminal graphics, capability
@@ -243,7 +243,7 @@ size: Size    // field: current terminal dimensions
 ```
 
 Rows and columns are **0-based**. `begin()` starts a frame, `present()` writes
-it to the terminal in a single write.
+the changed cells to the terminal in a single write.
 
 `showCursor` marks where the terminal cursor should be left when the frame is
 presented — use it for text prompts. A frame that never calls it presents with
@@ -295,13 +295,14 @@ Allocation-free, async-signal-safe, and a no-op when no `Ui` is active. See
 
 ## Rendering model
 
-Redraw everything, every frame. There is no diff, no back buffer, and no cell
-grid — `Screen` appends ANSI bytes to one reusable buffer and flushes it in a
-single write. A terminal holds little enough data that this is fast, and it
-removes an entire class of stale-cell bugs.
+Redraw everything logically, every frame. `Screen` retains front and back cell
+grids, compares them at `present()`, and emits only changed row spans. Your
+render function therefore stays stateless and immediate-mode, while moving a
+cursor normally repaints two rows instead of the whole terminal.
 
-The buffer is reused between frames, so steady-state rendering does not
-allocate.
+The grids, Unicode text arenas, and ANSI output buffer are reused between
+frames, so steady-state rendering does not allocate. A resize invalidates the
+old coordinates and causes one complete repaint from a cleared screen.
 
 **Clipping is automatic and measured in columns, not bytes.** Text is truncated
 to the terminal width using display width, so `é` counts as one column and `世`
@@ -391,15 +392,15 @@ The ABI in a target triple does not decide libc linkage; `-lc` and
 zooi will not grow a widget hierarchy, layout containers, focus propagation,
 mouse support, clipboard integration, terminal graphics, async jobs, background
 workers, filesystem watching, plugins, configurable themes, user-defined
-keybindings, diff-based rendering, or multiple panes.
+keybindings, or multiple panes.
 
 Known limits worth stating plainly:
 
 - **Unicode width is per-codepoint.** Combining marks and East Asian widths are
   handled; grapheme clusters, ZWJ emoji sequences, and variation selectors are
   not. A family emoji built from several people and ZWJs will measure wrong.
-- **No cell grid**, so there is nothing to query about what is currently on
-  screen. Your model is the source of truth.
+- **The retained grid is an output optimization, not application state.** It
+  is deliberately not queryable; your model remains the source of truth.
 - **Single-threaded.** All rendering and all state changes happen on the loop.
 
 If you need something on that list, you have outgrown zooi, and that is a fine

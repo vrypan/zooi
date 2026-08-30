@@ -348,6 +348,54 @@ test "render is total at every size, including degenerate ones" {
     }
 }
 
+test "moving the cursor emits a small retained-grid update" {
+    const gpa = std.testing.allocator;
+    const null_fd = try std.posix.openatZ(std.posix.AT.FDCWD, "/dev/null", .{ .ACCMODE = .WRONLY }, 0);
+    defer _ = std.posix.system.close(null_fd);
+
+    var m = model(24);
+    const size: zooi.Size = .{ .rows = 24, .cols = 80 };
+    m.size = size;
+    var screen = zooi.Screen.init(gpa, null_fd, size);
+    defer screen.deinit();
+
+    app.render(&m, &screen);
+    const initial_bytes = screen.frame().len;
+
+    _ = press(&m, &.{.down});
+    app.render(&m, &screen);
+    const movement_bytes = screen.frame().len;
+
+    // Only the old and new cursor rows changed. Keep this as a broad ratio
+    // rather than an exact ANSI snapshot so harmless encoding changes do not
+    // make the test brittle.
+    try expect(movement_bytes * 3 < initial_bytes);
+}
+
+test "the cursor highlight fills the complete list row" {
+    const gpa = std.testing.allocator;
+    const null_fd = try std.posix.openatZ(std.posix.AT.FDCWD, "/dev/null", .{ .ACCMODE = .WRONLY }, 0);
+    defer _ = std.posix.system.close(null_fd);
+
+    var m = model(6);
+    const size: zooi.Size = .{ .rows = 6, .cols = 320 };
+    m.size = size;
+    var screen = zooi.Screen.init(gpa, null_fd, size);
+    defer screen.deinit();
+    app.render(&m, &screen);
+
+    // Row 1 is the cursor row (row 0 is the header). Its final cell remains
+    // an explicit reverse-video space even beyond the 256-byte fill chunk.
+    const cursor_tail = screen.front.items[@as(usize, size.cols) * 2 - 1];
+    try expect(cursor_tail.style.reverse);
+    try expectEqual(@as(usize, 1), cursor_tail.text_len);
+
+    // The next list row was not cursor-highlighted and retains a true blank.
+    const next_tail = screen.front.items[@as(usize, size.cols) * 3 - 1];
+    try expect(!next_tail.style.reverse);
+    try expectEqual(@as(usize, 0), next_tail.text_len);
+}
+
 test "a resize keeps the cursor visible" {
     var m = model(24);
     _ = press(&m, &.{.end});

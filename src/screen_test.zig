@@ -9,6 +9,8 @@ const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 const gpa = std.testing.allocator;
 
+const preamble = "\x1b[0m\x1b[H\x1b[?25l";
+
 /// Present writes for real, so tests aim it at /dev/null and assert against
 /// `frame()`. Opened once and left open for the life of the test binary.
 var null_fd: std.posix.fd_t = -1;
@@ -23,244 +25,251 @@ fn testScreen(rows: u16, cols: u16) Screen {
     return Screen.init(gpa, nullFd(), .{ .rows = rows, .cols = cols });
 }
 
-/// Bytes written after `begin()`, so tests are not cluttered by the frame
-/// preamble.
 fn body(s: *const Screen) []const u8 {
-    const preamble = "\x1b[0m\x1b[H\x1b[?25l";
     return s.frame()[preamble.len..];
 }
 
-test "begin homes and hides the cursor without clearing the screen" {
-    // Clearing every frame blanks all cells and repaints them, which reads as
-    // flicker. Rows are erased individually instead; see the module docs.
+test "begin prepares a retained frame without painting cells" {
     var s = testScreen(24, 80);
     defer s.deinit();
     s.begin();
-    try expectEqualStrings("\x1b[0m\x1b[H\x1b[?25l", s.frame());
+    s.move(3, 7);
+    s.write("hello");
+    try expectEqualStrings(preamble, s.frame());
 }
 
-test "the first visit to a row erases the whole row" {
+test "the first frame clears once and paints only populated spans" {
     var s = testScreen(3, 20);
-    defer s.deinit();
-    s.begin();
-    s.move(0, 0);
-    s.write("ab");
-    s.move(1, 0);
-    try expectEqualStrings("\x1b[1;1H\x1b[Kab\x1b[2;1H\x1b[K", body(&s));
-}
-
-test "a row drawn at scattered columns has blank gaps, not stale cells" {
-    // The case that a from-the-cursor erase gets wrong: writing at column 2
-    // and again at column 14 must not leave last frame's content in between,
-    // or in columns 0 and 1.
-    var s = testScreen(2, 30);
     defer s.deinit();
     s.begin();
     s.move(0, 2);
     s.write("label");
     s.move(0, 14);
     s.write("value");
-    // Row erased once, up front, then positioned twice.
-    try expectEqualStrings("\x1b[1;1H\x1b[K\x1b[1;3Hlabel\x1b[1;15Hvalue", body(&s));
-}
-
-test "revisiting a row does not erase what was already drawn on it" {
-    var s = testScreen(2, 30);
-    defer s.deinit();
-    s.begin();
-    s.move(0, 0);
-    s.write("keep");
-    s.move(0, 10);
-    s.write("this");
-    try expect(std.mem.count(u8, body(&s), "\x1b[K") == 1);
-}
-
-test "rows the frame never touched are blanked at present" {
-    // This is what replaces the screen-wide clear: nothing stale survives.
-    var s = testScreen(4, 20);
-    defer s.deinit();
-    s.begin();
-    s.move(0, 0);
-    s.write("only this row");
+    s.move(1, 0);
+    s.write("second");
     try s.present();
+
     const out = body(&s);
-    try expect(std.mem.indexOf(u8, out, "\x1b[2;1H\x1b[K") != null);
-    try expect(std.mem.indexOf(u8, out, "\x1b[3;1H\x1b[K") != null);
-    try expect(std.mem.indexOf(u8, out, "\x1b[4;1H\x1b[K") != null);
+    try expect(std.mem.startsWith(u8, out, "\x1b[2J"));
+    try expect(std.mem.indexOf(u8, out, "\x1b[1;3Hlabel       value") != null);
+    try expect(std.mem.indexOf(u8, out, "\x1b[2;1Hsecond") != null);
+    // Empty row 3 was covered by the one-time clear, not repainted.
+    try expect(std.mem.indexOf(u8, out, "\x1b[3;") == null);
 }
 
-test "a frame that draws every row adds no blanking" {
+test "an identical second frame emits no cell updates" {
     var s = testScreen(3, 20);
     defer s.deinit();
+
     s.begin();
-    var r: u16 = 0;
-    while (r < 3) : (r += 1) {
-        s.move(r, 0);
-        s.write("x");
-    }
+    s.move(1, 4);
+    s.write("same");
     try s.present();
-    // One erase per row, and no blanking pass, because every row was drawn.
-    try expect(std.mem.count(u8, body(&s), "\x1b[K") == 3);
+
+    s.begin();
+    s.move(1, 4);
+    s.write("same");
+    try s.present();
+    try expectEqualStrings(preamble, s.frame());
 }
 
-test "move converts 0-based to the terminal's 1-based coordinates" {
-    // The likeliest off-by-one in the library, asserted explicitly.
+test "changing cursor style damages only the old and new rows" {
+    const cursor: Style = .{ .reverse = true };
+    var s = testScreen(4, 30);
+    defer s.deinit();
+
+    const draw = struct {
+        fn frame(screen: *Screen, selected: usize) void {
+            screen.begin();
+            for ([_][]const u8{ "alpha", "beta", "gamma", "delta" }, 0..) |text, row| {
+                screen.move(@intCast(row), 0);
+                screen.writeStyled(text, if (row == selected) cursor else .{});
+            }
+        }
+    }.frame;
+
+    draw(&s, 0);
+    try s.present();
+    draw(&s, 1);
+    try s.present();
+
+    const out = body(&s);
+    try expect(std.mem.indexOf(u8, out, "\x1b[1;1H") != null);
+    try expect(std.mem.indexOf(u8, out, "\x1b[2;1H") != null);
+    try expect(std.mem.indexOf(u8, out, "\x1b[3;1H") == null);
+    try expect(std.mem.indexOf(u8, out, "\x1b[4;1H") == null);
+    try expect(std.mem.indexOf(u8, out, "alpha") != null);
+    try expect(std.mem.indexOf(u8, out, "beta") != null);
+    try expect(std.mem.indexOf(u8, out, "gamma") == null);
+    try expect(std.mem.indexOf(u8, out, "delta") == null);
+}
+
+test "shortening or removing content clears the old tail" {
+    var s = testScreen(2, 20);
+    defer s.deinit();
+
+    s.begin();
+    s.write("a long first value");
+    s.move(1, 0);
+    s.write("remove me");
+    try s.present();
+
+    s.begin();
+    s.write("short");
+    try s.present();
+    const out = body(&s);
+    try expect(std.mem.indexOf(u8, out, "\x1b[1;1Hshort\x1b[K") != null);
+    try expect(std.mem.indexOf(u8, out, "\x1b[2;1H\x1b[K") != null);
+}
+
+test "erasing a styled tail resets its background first" {
+    var s = testScreen(2, 20);
+    defer s.deinit();
+
+    s.begin();
+    s.write("old first");
+    s.move(1, 0);
+    s.writeStyled("colored tail", .{ .reverse = true });
+    try s.present();
+
+    s.begin();
+    // Row 0 changes to a styled value, leaving reverse active immediately
+    // before the removed second row is erased.
+    s.writeStyled("new first", .{ .reverse = true });
+    try s.present();
+    const out = body(&s);
+    const row_two = std.mem.indexOf(u8, out, "\x1b[2;1H") orelse return error.TestUnexpectedResult;
+    const reset = std.mem.indexOfPos(u8, out, row_two, "\x1b[0m") orelse return error.TestUnexpectedResult;
+    const erase = std.mem.indexOfPos(u8, out, row_two, "\x1b[K") orelse return error.TestUnexpectedResult;
+    try expect(reset < erase);
+}
+
+test "move is 0-based and changed spans use 1-based ANSI coordinates" {
     var s = testScreen(24, 80);
     defer s.deinit();
-    s.begin();
-    s.move(0, 0);
-    try expectEqualStrings("\x1b[1;1H\x1b[K", body(&s));
-
     s.begin();
     s.move(3, 7);
-    try expectEqualStrings("\x1b[4;1H\x1b[K\x1b[4;8H", body(&s));
-}
-
-test "plain text within bounds appears verbatim" {
-    var s = testScreen(24, 80);
-    defer s.deinit();
-    s.begin();
-    s.move(0, 0);
-    s.write("hello");
-    try expectEqualStrings("\x1b[1;1H\x1b[Khello", body(&s));
+    s.write("x");
+    try s.present();
+    try expect(std.mem.indexOf(u8, body(&s), "\x1b[4;8Hx") != null);
 }
 
 test "text is clipped to the terminal width" {
-    var s = testScreen(24, 10);
+    var s = testScreen(2, 10);
     defer s.deinit();
     s.begin();
-    s.move(0, 0);
     s.write("abcdefghijklmno");
-    try expectEqualStrings("\x1b[1;1H\x1b[Kabcdefghij", body(&s));
+    try s.present();
+    try expect(std.mem.indexOf(u8, body(&s), "abcdefghij") != null);
+    try expect(std.mem.indexOf(u8, body(&s), "k") == null);
 }
 
-test "clipping counts columns, not bytes" {
-    // Six wide characters are twelve columns; ten columns fit five.
-    var s = testScreen(24, 10);
+test "clipping counts columns rather than bytes" {
+    var s = testScreen(2, 10);
     defer s.deinit();
     s.begin();
-    s.move(0, 0);
     s.write("世世世世世世");
-    try expectEqualStrings("\x1b[1;1H\x1b[K世世世世世", body(&s));
+    try s.present();
+    try expect(std.mem.indexOf(u8, body(&s), "世世世世世") != null);
+    try expect(std.mem.count(u8, body(&s), "世") == 5);
 }
 
 test "a wide character straddling the edge becomes a space" {
-    // Half a wide character corrupts the terminal's column tracking for the
-    // rest of the line, so it is never emitted.
-    var s = testScreen(24, 5);
+    var s = testScreen(2, 5);
     defer s.deinit();
     s.begin();
-    s.move(0, 0);
     s.write("abcd世");
-    try expectEqualStrings("\x1b[1;1H\x1b[Kabcd ", body(&s));
+    try s.present();
+    try expect(std.mem.indexOf(u8, body(&s), "abcd ") != null);
+    try expect(std.mem.indexOf(u8, body(&s), "世") == null);
 }
 
-test "writes to an off-screen row produce nothing" {
+test "overwriting either half of a wide cell clears the whole old glyph" {
+    var s = testScreen(2, 8);
+    defer s.deinit();
+
+    s.begin();
+    s.write("a世z");
+    try s.present();
+
+    s.begin();
+    s.write("a世z");
+    s.move(0, 2); // the continuation column of 世
+    s.write("x");
+    try s.present();
+    const out = body(&s);
+    try expect(std.mem.indexOf(u8, out, "\x1b[1;2H x") != null);
+    try expect(std.mem.indexOf(u8, out, "世") == null);
+}
+
+test "combining marks are retained with their base cell" {
+    var s = testScreen(2, 10);
+    defer s.deinit();
+
+    s.begin();
+    s.write("cafe\u{301}");
+    try s.present();
+    try expect(std.mem.indexOf(u8, body(&s), "cafe\u{301}") != null);
+
+    s.begin();
+    s.write("cafe\u{301}");
+    try s.present();
+    try expectEqualStrings(preamble, s.frame());
+}
+
+test "writes to an off-screen row produce no cells" {
     var s = testScreen(3, 80);
     defer s.deinit();
     s.begin();
     s.move(3, 0);
     s.write("invisible");
     s.clearToEndOfLine();
-    try expectEqualStrings("", body(&s));
-
-    // And an in-bounds row still works afterwards.
     s.move(1, 0);
     s.write("ok");
-    try expectEqualStrings("\x1b[2;1H\x1b[Kok", body(&s));
+    try s.present();
+    try expect(std.mem.indexOf(u8, body(&s), "invisible") == null);
+    try expect(std.mem.indexOf(u8, body(&s), "\x1b[2;1Hok") != null);
 }
 
-test "control bytes are dropped" {
-    // A recorded command can contain a stray CR. If it reached the terminal
-    // the row would be overwritten from column zero.
-    var s = testScreen(24, 80);
+test "control and malformed bytes are dropped" {
+    var s = testScreen(2, 80);
     defer s.deinit();
     s.begin();
-    s.move(0, 0);
-    s.write("a\rb\nc\x00d\x1b[2Je");
-    try expectEqualStrings("\x1b[1;1H\x1b[Kabcd[2Je", body(&s));
+    s.write("a\rb\nc\x00d\x1b[2Je\xfff");
+    try s.present();
+    try expect(std.mem.indexOf(u8, body(&s), "abcd[2Jef") != null);
 }
 
-test "malformed bytes are dropped" {
-    var s = testScreen(24, 80);
+test "identical adjacent styles emit one SGR run" {
+    var s = testScreen(2, 20);
     defer s.deinit();
     s.begin();
-    s.move(0, 0);
-    s.write("a\xffb");
-    try expectEqualStrings("\x1b[1;1H\x1b[Kab", body(&s));
-}
-
-test "an identical style is not re-emitted" {
-    var s = testScreen(24, 80);
-    defer s.deinit();
-    s.begin();
-    s.move(0, 0);
     s.writeStyled("a", .{ .bold = true });
     s.writeStyled("b", .{ .bold = true });
-    // One SGR run, then both characters.
-    try expectEqualStrings("\x1b[1;1H\x1b[K\x1b[0m\x1b[1m\x1b[39m\x1b[49mab", body(&s));
+    try s.present();
+    const out = body(&s);
+    try expect(std.mem.count(u8, out, "\x1b[1m") == 1);
+    try expect(std.mem.indexOf(u8, out, "ab") != null);
 }
 
-test "a changed style is re-emitted" {
-    var s = testScreen(24, 80);
+test "changed styles and all color forms are encoded" {
+    var s = testScreen(2, 20);
     defer s.deinit();
     s.begin();
-    s.move(0, 0);
-    s.writeStyled("a", .{ .bold = true });
-    s.writeStyled("b", .{ .reverse = true });
+    s.writeStyled("a", .{ .fg = .{ .ansi = 1 } });
+    s.writeStyled("b", .{ .fg = .{ .ansi = 9 } });
+    s.writeStyled("c", .{ .fg = .{ .indexed = 200 } });
+    s.writeStyled("d", .{ .bg = .{ .rgb = .{ .r = 1, .g = 2, .b = 3 } } });
+    s.writeStyled("e", .{});
+    try s.present();
     const out = body(&s);
-    try expect(std.mem.indexOf(u8, out, "\x1b[1m") != null);
-    try expect(std.mem.indexOf(u8, out, "\x1b[7m") != null);
-}
-
-test "the default style after a colored one resets rather than picks a color" {
-    var s = testScreen(24, 80);
-    defer s.deinit();
-    s.begin();
-    s.move(0, 0);
-    s.writeStyled("a", .{ .fg = .{ .ansi = 1 }, .bg = .{ .ansi = 2 } });
-    s.writeStyled("b", .{});
-    const out = body(&s);
-    // Null means the terminal's default, which is SGR 39/49 and not any
-    // particular color.
+    try expect(std.mem.indexOf(u8, out, "\x1b[31m") != null);
+    try expect(std.mem.indexOf(u8, out, "\x1b[91m") != null);
+    try expect(std.mem.indexOf(u8, out, "\x1b[38;5;200m") != null);
+    try expect(std.mem.indexOf(u8, out, "\x1b[48;2;1;2;3m") != null);
     try expect(std.mem.indexOf(u8, out, "\x1b[39m") != null);
     try expect(std.mem.indexOf(u8, out, "\x1b[49m") != null);
-}
-
-test "the default style at the start of a frame emits nothing" {
-    // begin() already reset SGR, so re-stating the default is redundant and
-    // the coalescing check suppresses it.
-    var s = testScreen(24, 80);
-    defer s.deinit();
-    s.begin();
-    s.move(0, 0);
-    s.writeStyled("x", .{});
-    try expectEqualStrings("\x1b[1;1H\x1b[Kx", body(&s));
-}
-
-test "colors encode in all three forms" {
-    var s = testScreen(24, 80);
-    defer s.deinit();
-
-    s.begin();
-    s.move(0, 0);
-    s.writeStyled("x", .{ .fg = .{ .ansi = 1 } });
-    try expect(std.mem.indexOf(u8, body(&s), "\x1b[31m") != null);
-
-    s.begin();
-    s.move(0, 0);
-    s.writeStyled("x", .{ .fg = .{ .ansi = 9 } }); // bright red is +60
-    try expect(std.mem.indexOf(u8, body(&s), "\x1b[91m") != null);
-
-    s.begin();
-    s.move(0, 0);
-    s.writeStyled("x", .{ .fg = .{ .indexed = 200 } });
-    try expect(std.mem.indexOf(u8, body(&s), "\x1b[38;5;200m") != null);
-
-    s.begin();
-    s.move(0, 0);
-    s.writeStyled("x", .{ .bg = .{ .rgb = .{ .r = 1, .g = 2, .b = 3 } } });
-    try expect(std.mem.indexOf(u8, body(&s), "\x1b[48;2;1;2;3m") != null);
 }
 
 test "showCursor positions and reveals the cursor at present time" {
@@ -276,10 +285,9 @@ test "a frame without showCursor leaves the cursor hidden" {
     var s = testScreen(24, 80);
     defer s.deinit();
     s.begin();
-    s.move(0, 0);
     s.write("x");
     try s.present();
-    try expect(std.mem.indexOf(u8, s.frame(), "\x1b[?25h") == null);
+    try expect(std.mem.indexOf(u8, body(&s), "\x1b[?25h") == null);
 }
 
 test "an off-screen cursor request is ignored" {
@@ -288,11 +296,25 @@ test "an off-screen cursor request is ignored" {
     s.begin();
     s.showCursor(99, 99);
     try s.present();
-    try expect(std.mem.indexOf(u8, s.frame(), "\x1b[?25h") == null);
+    try expect(std.mem.indexOf(u8, body(&s), "\x1b[?25h") == null);
 }
 
-test "a degenerate size accepts a full render and produces no output" {
-    // 0x0 is what a pty with no dimensions reports. Verified on hardware.
+test "resize invalidates coordinates and repaints from a clear screen" {
+    var s = testScreen(2, 10);
+    defer s.deinit();
+    s.begin();
+    s.write("before");
+    try s.present();
+
+    s.size = .{ .rows = 3, .cols = 12 };
+    s.begin();
+    s.write("after");
+    try s.present();
+    try expect(std.mem.startsWith(u8, body(&s), "\x1b[2J"));
+    try expect(std.mem.indexOf(u8, body(&s), "after") != null);
+}
+
+test "degenerate sizes accept a complete render" {
     for ([_]Size{ .{ .rows = 0, .cols = 0 }, .{ .rows = 1, .cols = 1 } }) |sz| {
         var s = Screen.init(gpa, nullFd(), sz);
         defer s.deinit();
@@ -306,25 +328,37 @@ test "a degenerate size accepts a full render and produces no output" {
     }
 }
 
-test "frames are independent and steady state does not allocate" {
+test "steady-state frames reuse grid, text, and output allocations" {
     var s = testScreen(24, 80);
     defer s.deinit();
 
     s.begin();
     s.move(0, 0);
     s.write("hello");
-    const first = try gpa.dupe(u8, s.frame());
-    defer gpa.free(first);
+    try s.present();
 
-    const cap_before = s.buf.capacity;
+    // The second frame allocates the other half of the double buffer.
     s.begin();
     s.move(0, 0);
     s.write("hello");
+    try s.present();
+    const capacities = .{
+        s.buf.capacity,
+        s.front.capacity,
+        s.back.capacity,
+        s.front_text.capacity,
+        s.back_text.capacity,
+    };
 
-    // Identical bytes: clearRetainingCapacity leaves no state behind.
-    try expectEqualStrings(first, s.frame());
-    // And no reallocation, which is what makes full redraws defensible.
-    try expectEqual(cap_before, s.buf.capacity);
+    s.begin();
+    s.move(0, 0);
+    s.write("hello");
+    try s.present();
+    try expectEqual(capacities[0], s.buf.capacity);
+    try expectEqual(capacities[1], s.front.capacity);
+    try expectEqual(capacities[2], s.back.capacity);
+    try expectEqual(capacities[3], s.front_text.capacity);
+    try expectEqual(capacities[4], s.back_text.capacity);
 }
 
 test "an allocation failure latches and surfaces at present" {
@@ -332,13 +366,9 @@ test "an allocation failure latches and surfaces at present" {
     var s = Screen.init(failing.allocator(), nullFd(), .{ .rows = 24, .cols = 80 });
     defer s.deinit();
 
-    // A whole render sequence runs without crashing...
     s.begin();
-    s.move(0, 0);
     s.write("hello");
     s.writeStyled("world", .{ .bold = true });
     s.clearToEndOfLine();
-
-    // ...and the failure appears exactly once, at the boundary.
     try std.testing.expectError(error.OutOfMemory, s.present());
 }
