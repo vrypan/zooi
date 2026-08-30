@@ -1,0 +1,6 @@
+zig-out/
+.zig-cache/
+
+# Prebuilt verifier binaries. Rebuild them with the command in the header of
+# verify/zooi-verify.zig rather than carrying half a megabyte per architecture.
+verify/zooi-verify-*
