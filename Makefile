@@ -1,7 +1,7 @@
 ZIG ?= zig
 
 .DEFAULT_GOAL := build
-.PHONY: build test test-unit verify fmt fmt-check check clean
+.PHONY: build test test-unit verify version-check fmt fmt-check check clean
 
 build:
 	$(ZIG) build
@@ -18,6 +18,11 @@ test-unit:
 # Standalone runtime check, for pasting back from an unusual terminal.
 verify:
 	$(ZIG) build verify && ./zig-out/bin/zooi-verify
+
+# Run before tagging: CI catches a version mismatch, but only after the tag
+# exists. Usage: make version-check TAG=v0.1.3
+version-check:
+	@tools/check-version.sh $(TAG)
 
 fmt:
 	$(ZIG) fmt .
