@@ -648,3 +648,17 @@ test "a combining mark still attaches when the cell has room" {
     try s.present();
     try expectEqualStrings("e\u{0301}", s.front_text.items[0..s.front.items[0].text_len]);
 }
+
+test "a write that lands off-screen still records its style" {
+    var s = testScreen(1, 4);
+    defer s.deinit();
+    s.begin();
+    // Clipped away entirely, so nothing is drawn — but the application did ask
+    // for this style, and the bare `write` below is entitled to it.
+    s.move(0, 10);
+    s.writeStyled("ignored", .{ .bold = true });
+    s.move(0, 0);
+    s.write("ab");
+    try s.present();
+    try expectEqual(Style{ .bold = true }, s.front.items[0].style);
+}

@@ -69,7 +69,14 @@ fn waitWritable(fd: Fd) bool {
 
 pub fn writeAll(fd: Fd, bytes: []const u8) error{WriteFailed}!void {
     var off: usize = 0;
-    while (off < bytes.len) off += try write(fd, bytes[off..]);
+    while (off < bytes.len) {
+        const n = try write(fd, bytes[off..]);
+        // A successful zero-byte write of a non-empty buffer makes no
+        // progress. Nothing should produce one, but looping on it would hang
+        // the process inside a frame with no way out and no error.
+        if (n == 0) return error.WriteFailed;
+        off += n;
+    }
 }
 
 /// A pipe a signal handler can write to in order to wake the event loop.

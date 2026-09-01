@@ -25,7 +25,8 @@ pub const restore = @import("terminal.zig").restore;
 /// it cannot be done by measuring bytes: `é` is two bytes and one column,
 /// `世` three bytes and two, a combining mark two bytes and none.
 ///
-/// Per-codepoint. Grapheme clusters and ZWJ emoji sequences are out of scope.
+/// Per-codepoint. Grapheme clusters and ZWJ emoji sequences are out of scope,
+/// and control bytes measure one column each although `Screen` drops them.
 pub const displayWidth = @import("width.zig").strWidth;
 
 test {

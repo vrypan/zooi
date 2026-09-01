@@ -89,7 +89,13 @@ pub const PtyChild = struct {
         var off: usize = 0;
         while (off < bytes.len) {
             const n = c.write(self.master, bytes.ptr + off, bytes.len - off);
-            if (n < 0) return error.SpawnFailed;
+            if (n < 0) {
+                // A signal landing mid-write is not a failed send. Treating it
+                // as one would fail a test for a reason unrelated to zooi.
+                if (posix.errno(n) == .INTR) continue;
+                return error.SpawnFailed;
+            }
+            if (n == 0) return error.SpawnFailed;
             off += @intCast(n);
         }
     }
@@ -189,8 +195,12 @@ pub const PtyChild = struct {
             const is_output = p.fd == self.master;
             var buf: [4096]u8 = undefined;
             // A pty master reports EIO rather than EOF once the child is gone,
-            // so any read failure is the end of that stream.
-            const got = posix.read(p.fd, &buf) catch 0;
+            // so a read failure is the end of that stream — except EAGAIN,
+            // which only means the bytes poll saw were taken already.
+            const got = posix.read(p.fd, &buf) catch |err| switch (err) {
+                error.WouldBlock => continue,
+                else => 0,
+            };
             if (got == 0) {
                 if (is_output) self.output_eof = true else self.marks_eof = true;
                 continue;

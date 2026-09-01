@@ -56,6 +56,14 @@ var obuf: [16 * 1024]u8 = undefined;
 var olen: usize = 0;
 
 fn emit(comptime fmt: []const u8, args: anytype) void {
+    if (std.fmt.bufPrint(obuf[olen..], fmt, args)) |s| {
+        olen += s.len;
+        return;
+    } else |_| {}
+    // Out of room. Get what is buffered onto the terminal and try once more,
+    // rather than dropping the rest: a report that stopped part-way silently
+    // reads as a suite that had nothing more to say.
+    flush();
     const s = std.fmt.bufPrint(obuf[olen..], fmt, args) catch return;
     olen += s.len;
 }

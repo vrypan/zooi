@@ -47,6 +47,11 @@ fn inRanges(ranges: []const table.Range, cp: u21) bool {
 /// matching what a terminal does with them: a journal can contain arbitrary
 /// bytes from arbitrary programs, and a measurement that can fail would turn
 /// every render into an error path for no benefit.
+///
+/// Control characters are counted the same way, at one column each. `Screen`
+/// drops them instead of drawing them, so a string measured here and then
+/// written there comes up short by one column per control byte. Strip them
+/// before laying out text that has to line up.
 pub fn strWidth(bytes: []const u8) usize {
     var total: usize = 0;
     var i: usize = 0;

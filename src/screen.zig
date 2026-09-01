@@ -189,8 +189,12 @@ pub const Screen = struct {
     }
 
     pub fn writeStyled(self: *Screen, text: []const u8, style: Style) void {
-        if (self.err != null or self.offScreen()) return;
+        // Recorded before the early return, so a following bare `write` uses
+        // the style the application last asked for. Otherwise a call that
+        // happened to land off-screen would silently leave the previous style
+        // in place for the next one.
         self.draw_style = style;
+        if (self.err != null or self.offScreen()) return;
         self.writeClipped(text, style);
     }
 

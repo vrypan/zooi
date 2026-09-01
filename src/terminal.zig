@@ -99,8 +99,17 @@ pub const Terminal = struct {
     sync: bool = true,
     wake: [2]Fd,
     prev_winch: posix.Sigaction,
+    /// The restore state and wake descriptor this terminal displaced, put back
+    /// by `deinit` for the same reason `prev_winch` is: only one `Ui` is
+    /// expected at a time, but clearing the globals unconditionally would
+    /// leave an outer terminal unrestorable if there ever were two.
+    prev_global: ?Saved = null,
+    prev_wake_fd: Fd = -1,
 
     pub fn init(options: Options) Error!Terminal {
+        const prev_global = global;
+        const prev_wake_fd = wake_fd;
+
         const acquired = try acquire(options.tty);
         errdefer if (acquired.owned) |fd| sys.close(fd);
         const fd = acquired.in_fd;
@@ -130,7 +139,7 @@ pub const Terminal = struct {
             .flags = posix.SA.RESTART,
         }, &prev);
         errdefer {
-            wake_fd = -1;
+            wake_fd = prev_wake_fd;
             posix.sigaction(posix.SIG.WINCH, &prev, null);
         }
 
@@ -158,6 +167,8 @@ pub const Terminal = struct {
             .sync = options.synchronized_output,
             .wake = wake,
             .prev_winch = prev,
+            .prev_global = prev_global,
+            .prev_wake_fd = prev_wake_fd,
         };
     }
 
@@ -177,12 +188,12 @@ pub const Terminal = struct {
         }
         posix.tcsetattr(self.in_fd, .DRAIN, self.saved) catch {};
 
-        wake_fd = -1;
+        wake_fd = self.prev_wake_fd;
         posix.sigaction(posix.SIG.WINCH, &self.prev_winch, null);
         sys.close(self.wake[0]);
         sys.close(self.wake[1]);
 
-        global = null;
+        global = self.prev_global;
         if (self.owned) |fd| sys.close(fd);
     }
 
