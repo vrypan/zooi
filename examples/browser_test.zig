@@ -61,9 +61,9 @@ test "g and G jump to the ends" {
 
 test "paging does not overshoot the list" {
     var m = model(8);
-    _ = press(&m, &.{ .page_down, .page_down, .page_down, .page_down });
+    for (0..m.count) |_| _ = press(&m, &.{.page_down});
     try expectEqual(m.count - 1, m.viewport.cursor);
-    _ = press(&m, &.{ .page_up, .page_up, .page_up, .page_up });
+    for (0..m.count) |_| _ = press(&m, &.{.page_up});
     try expectEqual(@as(usize, 0), m.viewport.cursor);
 }
 
@@ -84,9 +84,19 @@ test "the cursor stays inside the viewport after every step" {
 }
 
 test "a short list never scrolls" {
-    var m = model(24); // more rows than entries
+    var m = model(24);
+    m.count = 4;
+    m.viewport.normalize(m.count, m.listRows());
     _ = press(&m, &.{.end});
     try expectEqual(@as(usize, 0), m.viewport.offset);
+}
+
+test "the example data scrolls even on a tall terminal" {
+    var m = model(50);
+    try expect(m.count > m.listRows());
+    _ = press(&m, &.{.end});
+    try expect(m.viewport.offset > 0);
+    try expect(m.viewport.cursor < m.viewport.offset + m.listRows());
 }
 
 // --- selection ---------------------------------------------------------------

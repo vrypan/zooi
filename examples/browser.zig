@@ -21,7 +21,7 @@ const zooi = @import("zooi");
 
 // --- fake data ---------------------------------------------------------------
 
-const max_entries = 64;
+const max_entries = 100;
 const text_max = 48;
 
 pub const Entry = struct {
@@ -42,8 +42,9 @@ pub const Entry = struct {
     }
 };
 
-/// Deliberately includes a wide-character command and a combining accent, so
-/// running this shows the width handling working rather than asserting it.
+/// Command templates are repeated with distinct entry numbers to keep the
+/// source readable while providing enough rows to demonstrate the viewport on
+/// a tall terminal. The set deliberately includes wide and combining text.
 const seed = [_]struct { status: u8, command: []const u8 }{
     .{ .status = 0, .command = "git status" },
     .{ .status = 0, .command = "zig build test" },
@@ -166,14 +167,15 @@ pub const Model = struct {
 
     pub fn init() Model {
         var m: Model = .{};
-        for (seed, 0..) |s, i| {
+        for (0..max_entries) |i| {
+            const s = seed[i % seed.len];
             m.entries[i] = .{
                 .number = @intCast(i + 24),
                 .status = s.status,
                 .command = s.command,
             };
         }
-        m.count = seed.len;
+        m.count = max_entries;
         m.entries[3].pinned = true;
         return m;
     }
