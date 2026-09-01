@@ -384,16 +384,23 @@ test "the cursor highlight fills the complete list row" {
     defer screen.deinit();
     app.render(&m, &screen);
 
-    // Row 1 is the cursor row (row 0 is the header). Its final cell remains
-    // an explicit reverse-video space even beyond the 256-byte fill chunk.
-    const cursor_tail = screen.front.items[@as(usize, size.cols) * 2 - 1];
+    const presented = zooi.testing.presentedSize(&screen).?;
+    try expectEqual(size, presented);
+
+    // Row 1 is the cursor row (row 0 is the header). Its final cell is an
+    // explicit reverse-video space even beyond column 256.
+    const cursor_tail = zooi.testing.inspectCell(&screen, 1, presented.cols - 1).?;
+    try expectEqualStrings(" ", cursor_tail.text);
     try expect(cursor_tail.style.reverse);
-    try expectEqual(@as(usize, 1), cursor_tail.text_len);
+    try expectEqual(@as(u2, 1), cursor_tail.columns);
+    try expect(!cursor_tail.continuation);
 
     // The next list row was not cursor-highlighted and retains a true blank.
-    const next_tail = screen.front.items[@as(usize, size.cols) * 3 - 1];
+    const next_tail = zooi.testing.inspectCell(&screen, 2, presented.cols - 1).?;
+    try expectEqualStrings("", next_tail.text);
     try expect(!next_tail.style.reverse);
-    try expectEqual(@as(usize, 0), next_tail.text_len);
+    try expectEqual(@as(u2, 1), next_tail.columns);
+    try expect(!next_tail.continuation);
 }
 
 test "a resize keeps the cursor visible" {

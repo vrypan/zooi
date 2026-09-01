@@ -273,6 +273,7 @@ pub fn showCursor(self: *Screen, row: u16, col: u16) void
 pub fn setSynchronizedOutput(self: *Screen, enabled: bool) void
 pub fn setRepeatSequences(self: *Screen, enabled: bool) void
 pub fn present(self: *Screen) !void
+pub fn frame(self: *const Screen) []const u8
 
 size: Size    // field: current terminal dimensions
 ```
@@ -310,6 +311,28 @@ pub const Color = union(enum) {
 
 `null` uses the terminal's default color. `.ansi` uses the terminal's configured
 16-color palette.
+
+### `testing`
+
+The `zooi.testing` namespace provides a read-only view of the last successfully
+presented logical frame:
+
+```zig
+pub const CellView = struct {
+    text: []const u8,
+    style: Style,
+    columns: u2,
+    continuation: bool,
+};
+
+pub fn presentedSize(screen: *const Screen) ?Size
+pub fn inspectCell(screen: *const Screen, row: u16, col: u16) ?CellView
+```
+
+Both functions return `null` before a successful presentation or after a
+failed one. `inspectCell` also returns `null` outside the presented size.
+`CellView.text` borrows screen storage and must be consumed before the next
+`present()` or `Screen.deinit()`.
 
 ### `displayWidth()`
 
@@ -400,11 +423,37 @@ test "cursor stops at the end of the list" {
 }
 ```
 
-Render at a fixed size and inspect `frame()` to test output, including sizes
-such as `0 × 0`. `frame()` contains the ANSI bytes from the most recent
-`present()`. The first frame paints the screen; later frames contain changes
-from the previous successful frame. Use the same `Screen` for successive
-models when testing retained rendering.
+`frame()` contains the ANSI bytes emitted by the most recent `present()`. Use it
+for encoder assertions and to compare retained-diff size. The first frame
+paints the screen; later frames contain only changes from the previous
+successful frame.
+
+For logical render assertions, inspect the last successfully presented frame:
+
+```zig
+const fd = try std.posix.openatZ(
+    std.posix.AT.FDCWD,
+    "/dev/null",
+    .{ .ACCMODE = .WRONLY },
+    0,
+);
+defer _ = std.posix.system.close(fd);
+
+var screen = zooi.Screen.init(std.testing.allocator, fd, .{ .rows = 3, .cols = 20 });
+defer screen.deinit();
+screen.begin();
+screen.writeStyled("selected", .{ .reverse = true });
+screen.fillToEndOfLine(.{ .reverse = true });
+try screen.present();
+
+const cell = zooi.testing.inspectCell(&screen, 0, 19).?;
+try std.testing.expectEqualStrings(" ", cell.text);
+try std.testing.expect(cell.style.reverse);
+```
+
+The returned text is borrowed; assert on it before the next `present()`. Keep
+application state in the model: production layout, navigation, and event
+handling should not read values back from the screen.
 
 Terminal behaviour itself needs a real terminal, and that is the one place
 where unit tests cannot help. zooi's own suite covers it in
@@ -451,7 +500,9 @@ Known limits:
 - **Unicode width is per-codepoint.** Combining marks and East Asian widths are
   handled; grapheme clusters, ZWJ emoji sequences, and variation selectors are
   not. A family emoji built from several people and ZWJs will measure wrong.
-- **The retained grid is not application state.** It cannot be queried.
+- **The retained grid is not application state.** Tests can inspect the last
+  successfully presented frame through a read-only diagnostic view, but
+  production code should not recover its model from rendered cells.
 - **Single-threaded.** All rendering and all state changes happen on the loop.
 - **No job control.** `ISIG` is off and Ctrl-Z is not delivered as a key, so a
   zooi application cannot be suspended and resumed.

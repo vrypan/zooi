@@ -43,6 +43,7 @@ pub fn build(b: *std.Build) void {
         "src/input_test.zig",
         "src/screen_test.zig",
         "src/viewport_test.zig",
+        "src/testing_test.zig",
         "src/terminal_test.zig",
         "src/event_test.zig",
         "examples/browser_test.zig",
