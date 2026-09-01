@@ -152,8 +152,7 @@ pub const Msg = union(enum) {
 pub const Model = struct {
     entries: [max_entries]Entry = undefined,
     count: usize = 0,
-    cursor: usize = 0,
-    scroll: usize = 0,
+    viewport: zooi.Viewport = .{},
     selection: Selection = .none,
     mode: Mode = .normal,
     size: zooi.Size = .{ .rows = 24, .cols = 80 },
@@ -207,7 +206,7 @@ pub const Model = struct {
     /// otherwise the cursor entry.
     fn target(self: *const Model) struct { lo: usize, hi: usize } {
         if (self.selection.bounds()) |b| return .{ .lo = b.lo, .hi = b.hi };
-        return .{ .lo = self.cursor, .hi = self.cursor };
+        return .{ .lo = self.viewport.cursor, .hi = self.viewport.cursor };
     }
 };
 
@@ -222,7 +221,7 @@ pub fn update(m: *Model, msg: Msg) Effect {
         .terminal => |event| switch (event) {
             .resize => |size| {
                 m.size = size;
-                scrollToCursor(m);
+                m.viewport.normalize(m.count, m.listRows());
                 return .none;
             },
             .key => |key| return onKey(m, key),
@@ -291,7 +290,10 @@ fn normalKey(m: *Model, key: zooi.Key) Effect {
                 return .none;
             },
             'v' => {
-                m.selection = .{ .range = .{ .anchor = m.cursor, .cursor = m.cursor } };
+                m.selection = .{ .range = .{
+                    .anchor = m.viewport.cursor,
+                    .cursor = m.viewport.cursor,
+                } };
                 m.setStatus("range selection started", .{});
             },
             'p' => {
@@ -371,25 +373,24 @@ fn inspectKey(m: *Model, key: zooi.Key) Effect {
 }
 
 fn setCursor(m: *Model, i: usize) void {
-    if (m.count == 0) return;
-    m.cursor = @min(i, m.count - 1);
-    if (m.selection == .range) m.selection.range.cursor = m.cursor;
-    scrollToCursor(m);
+    m.viewport.setCursor(i, m.count, m.listRows());
+    if (m.count > 0 and m.selection == .range)
+        m.selection.range.cursor = m.viewport.cursor;
 }
 
 fn moveCursor(m: *Model, delta: isize) void {
-    if (m.count == 0) return;
-    const cur: isize = @intCast(m.cursor);
-    const last: isize = @intCast(m.count - 1);
-    // Clamp rather than wrap, at both ends.
-    const next = @max(@as(isize, 0), @min(last, cur + delta));
-    setCursor(m, @intCast(next));
+    m.viewport.move(delta, m.count, m.listRows());
+    if (m.count > 0 and m.selection == .range)
+        m.selection.range.cursor = m.viewport.cursor;
 }
 
 fn extend(m: *Model, delta: isize) void {
     if (m.count == 0) return;
     if (m.selection != .range) {
-        m.selection = .{ .range = .{ .anchor = m.cursor, .cursor = m.cursor } };
+        m.selection = .{ .range = .{
+            .anchor = m.viewport.cursor,
+            .cursor = m.viewport.cursor,
+        } };
     }
     moveCursor(m, delta);
 }
@@ -397,42 +398,26 @@ fn extend(m: *Model, delta: isize) void {
 fn toggleSelect(m: *Model) void {
     if (m.count == 0) return;
     switch (m.selection) {
-        .single => |i| if (i == m.cursor) {
+        .single => |i| if (i == m.viewport.cursor) {
             m.selection = .none;
         } else {
-            m.selection = .{ .single = m.cursor };
+            m.selection = .{ .single = m.viewport.cursor };
         },
-        else => m.selection = .{ .single = m.cursor },
+        else => m.selection = .{ .single = m.viewport.cursor },
     }
-}
-
-/// Keep the cursor inside the viewport. The invariant the whole list view
-/// depends on: scroll <= cursor < scroll + listRows.
-fn scrollToCursor(m: *Model) void {
-    const rows = m.listRows();
-    if (rows == 0) {
-        m.scroll = 0;
-        return;
-    }
-    if (m.cursor < m.scroll) m.scroll = m.cursor;
-    if (m.cursor >= m.scroll + rows) m.scroll = m.cursor - rows + 1;
-    // Do not leave blank rows below when the list is shorter than the view.
-    if (m.count <= rows) m.scroll = 0;
 }
 
 /// After entries disappear, the cursor and selection may point past the end.
 fn normalise(m: *Model) void {
     if (m.count == 0) {
-        m.cursor = 0;
-        m.scroll = 0;
+        m.viewport.normalize(0, m.listRows());
         m.selection = .none;
         return;
     }
-    if (m.cursor >= m.count) m.cursor = m.count - 1;
+    m.viewport.normalize(m.count, m.listRows());
     if (m.selection.bounds()) |b| {
         if (b.hi >= m.count) m.selection = .none;
     }
-    scrollToCursor(m);
 }
 
 // --- effects -----------------------------------------------------------------
@@ -473,7 +458,7 @@ pub fn executeEffect(m: *Model, effect: Effect) ?Msg {
             // Uniqueness is a domain rule; rejecting here shows how an
             // operational error becomes a status message rather than an exit.
             for (m.entries[0..m.count], 0..) |*e, i| {
-                if (i != m.cursor and e.name() != null and
+                if (i != m.viewport.cursor and e.name() != null and
                     std.mem.eql(u8, e.name().?, text))
                 {
                     m.setStatus("name \"{s}\" is already taken", .{text});
@@ -481,9 +466,12 @@ pub fn executeEffect(m: *Model, effect: Effect) ?Msg {
                 }
             }
             const n = @min(text.len, text_max);
-            @memcpy(m.entries[m.cursor].name_buf[0..n], text[0..n]);
-            m.entries[m.cursor].name_len = n;
-            m.setStatus("named entry {d} \"{s}\"", .{ m.entries[m.cursor].number, text });
+            @memcpy(m.entries[m.viewport.cursor].name_buf[0..n], text[0..n]);
+            m.entries[m.viewport.cursor].name_len = n;
+            m.setStatus("named entry {d} \"{s}\"", .{
+                m.entries[m.viewport.cursor].number,
+                text,
+            });
             return .data_changed;
         },
 
@@ -563,26 +551,19 @@ fn renderHeader(m: *const Model, screen: *zooi.Screen) void {
     }) catch " zooi browser ";
     screen.move(0, 0);
     screen.writeStyled(text, header_style);
-    // Pad the reverse-video bar out to the full width in one write rather
-    // than a space at a time.
-    var pad: [256]u8 = @splat(' ');
-    const used = zooi.displayWidth(text);
-    if (used < m.size.cols) {
-        const n = @min(m.size.cols - used, pad.len);
-        screen.writeStyled(pad[0..n], header_style);
-    }
+    screen.fillToEndOfLine(header_style);
 }
 
 fn renderList(m: *const Model, screen: *zooi.Screen) void {
     const rows = m.listRows();
     var row: usize = 0;
     while (row < rows) : (row += 1) {
-        const idx = m.scroll + row;
+        const idx = m.viewport.offset + row;
         screen.move(@intCast(row + 1), 0);
         if (idx >= m.count) continue;
 
         const e = &m.entries[idx];
-        const is_cursor = idx == m.cursor;
+        const is_cursor = idx == m.viewport.cursor;
         const is_selected = m.selection.contains(idx);
 
         // The four states the spec calls for.
@@ -596,19 +577,8 @@ fn renderList(m: *const Model, screen: *zooi.Screen) void {
             .{};
 
         // Reverse video must cover the row, not stop after the command text.
-        // Prefill before drawing the content so the retained grid keeps the
-        // cursor style in every trailing cell. Chunking handles terminals
-        // wider than the fixed stack buffer without allocating.
-        if (is_cursor) {
-            var spaces: [256]u8 = @splat(' ');
-            var left: usize = m.size.cols;
-            while (left > 0) {
-                const n = @min(left, spaces.len);
-                screen.writeStyled(spaces[0..n], style);
-                left -= n;
-            }
-            screen.move(@intCast(row + 1), 0);
-        }
+        // Prefill before drawing content so reverse video reaches the edge.
+        if (is_cursor) screen.fillToEndOfLine(style);
 
         var buf: [256]u8 = undefined;
         const head = std.fmt.bufPrint(&buf, "{s}{s}{s} {d: >4} ", .{
@@ -682,7 +652,7 @@ fn renderFooter(m: *const Model, screen: *zooi.Screen) void {
 }
 
 fn renderInspect(m: *const Model, screen: *zooi.Screen) void {
-    const e = &m.entries[m.cursor];
+    const e = &m.entries[m.viewport.cursor];
     screen.move(0, 0);
     screen.writeStyled(" inspect ", header_style);
 

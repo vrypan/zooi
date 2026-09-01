@@ -257,6 +257,122 @@ test "writes to an off-screen row produce no cells" {
     try expect(std.mem.indexOf(u8, body(&s), "\x1b[2;1Hok") != null);
 }
 
+test "fillToEndOfLine fills a complete row with explicit styled spaces" {
+    const style: Style = .{ .reverse = true };
+    var s = testScreen(1, 8);
+    defer s.deinit();
+    s.begin();
+    s.fillToEndOfLine(style);
+    try s.present();
+
+    for (s.front.items) |cell| {
+        try expect(std.meta.eql(style, cell.style));
+        try expectEqual(@as(usize, 1), cell.text_len);
+        try expectEqual(@as(u8, ' '), s.front_text.items[cell.text_off]);
+    }
+}
+
+test "fillToEndOfLine starts at the current column" {
+    const style: Style = .{ .bg = .{ .ansi = 4 } };
+    var s = testScreen(1, 8);
+    defer s.deinit();
+    s.begin();
+    s.move(0, 3);
+    s.fillToEndOfLine(style);
+    try s.present();
+
+    for (s.front.items[0..3]) |cell|
+        try expect(cell.text_len == 0 and !cell.continuation);
+    for (s.front.items[3..]) |cell| try expect(std.meta.eql(style, cell.style));
+}
+
+test "fillToEndOfLine preserves cursor and drawing style" {
+    const draw_style: Style = .{ .bold = true };
+    var s = testScreen(1, 8);
+    defer s.deinit();
+    s.begin();
+    s.writeStyled("a", draw_style);
+    s.move(0, 3);
+    s.fillToEndOfLine(.{ .reverse = true });
+    s.write("x");
+    try s.present();
+
+    const cell = s.front.items[3];
+    try expect(std.meta.eql(draw_style, cell.style));
+    try expectEqualStrings("x", s.front_text.items[cell.text_off..][0..cell.text_len]);
+}
+
+test "fillToEndOfLine styles the last cell of a wide row" {
+    const style: Style = .{ .reverse = true };
+    var s = testScreen(1, 320);
+    defer s.deinit();
+    s.begin();
+    s.move(0, 4);
+    s.fillToEndOfLine(style);
+    try s.present();
+
+    const tail = s.front.items[319];
+    try expect(std.meta.eql(style, tail.style));
+    try expectEqual(@as(usize, 1), tail.text_len);
+}
+
+test "an identical filled frame emits no cell updates" {
+    var s = testScreen(1, 20);
+    defer s.deinit();
+    for (0..2) |_| {
+        s.begin();
+        s.move(0, 2);
+        s.fillToEndOfLine(.{ .reverse = true });
+        try s.present();
+    }
+    try expectEqualStrings(preamble ++ end_sync, s.frame());
+}
+
+test "clearToEndOfLine restores a styled fill to true blanks" {
+    var s = testScreen(1, 8);
+    defer s.deinit();
+    s.begin();
+    s.fillToEndOfLine(.{ .reverse = true });
+    try s.present();
+
+    s.begin();
+    s.move(0, 2);
+    s.fillToEndOfLine(.{ .reverse = true });
+    s.clearToEndOfLine();
+    try s.present();
+    for (s.front.items) |cell|
+        try expect(cell.text_len == 0 and !cell.continuation);
+}
+
+test "fillToEndOfLine clears either half of an overlapping wide glyph" {
+    for ([_]u16{ 1, 2 }) |col| {
+        var s = testScreen(1, 8);
+        defer s.deinit();
+        s.begin();
+        s.write("a世z");
+        s.move(0, col);
+        s.fillToEndOfLine(.{ .reverse = true });
+        try s.present();
+
+        try expect(s.front.items[1].text_len != "世".len);
+        try expect(!s.front.items[1].continuation);
+        try expect(!s.front.items[2].continuation);
+    }
+}
+
+test "fillToEndOfLine is a no-op outside the screen" {
+    var s = testScreen(2, 8);
+    defer s.deinit();
+    s.begin();
+    s.move(2, 0);
+    s.fillToEndOfLine(.{ .reverse = true });
+    s.move(0, 8);
+    s.fillToEndOfLine(.{ .reverse = true });
+    try s.present();
+    for (s.front.items) |cell|
+        try expect(cell.text_len == 0 and !cell.continuation);
+}
+
 test "control and malformed bytes are dropped" {
     var s = testScreen(2, 80);
     defer s.deinit();

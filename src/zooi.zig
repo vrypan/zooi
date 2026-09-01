@@ -16,6 +16,7 @@ pub const Size = @import("event.zig").Size;
 pub const Screen = @import("screen.zig").Screen;
 pub const Style = @import("screen.zig").Style;
 pub const Color = @import("screen.zig").Color;
+pub const Viewport = @import("viewport.zig").Viewport;
 pub const restore = @import("terminal.zig").restore;
 
 /// Columns a UTF-8 string occupies in a terminal, which is not its byte

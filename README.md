@@ -158,8 +158,6 @@ there is no input.
 
 ## API
 
-The public API has nine items.
-
 ### `Ui`
 
 The terminal session.
@@ -238,6 +236,30 @@ signal. Applications must handle it.
 Both CSI (`ESC [ A`) and SS3 (`ESC O A`) forms are supported for arrows,
 Home, and End. Shift-Tab is read from `ESC [ Z`.
 
+### `Viewport`
+
+`Viewport` provides allocation-free cursor and scroll-offset arithmetic for
+lists. It does not consume keys, own application data, or render rows.
+
+```zig
+pub const Viewport = struct {
+    cursor: usize = 0,
+    offset: usize = 0,
+
+    pub const Range = struct { start: usize, end: usize };
+
+    pub fn normalize(self: *Viewport, item_count: usize, visible_rows: usize) void
+    pub fn setCursor(self: *Viewport, index: usize, item_count: usize, visible_rows: usize) void
+    pub fn move(self: *Viewport, delta: isize, item_count: usize, visible_rows: usize) void
+    pub fn visibleRange(self: Viewport, item_count: usize, visible_rows: usize) Range
+};
+```
+
+Movement clamps at both ends and adjusts `offset` only enough to keep the
+cursor visible. An empty list resets both fields to zero. With zero visible
+rows the cursor remains clamped, `offset` equals the cursor, and the returned
+range is empty. `Range.end` is exclusive.
+
 ### `Screen`
 
 ```zig
@@ -246,6 +268,7 @@ pub fn move(self: *Screen, row: u16, col: u16) void
 pub fn write(self: *Screen, text: []const u8) void
 pub fn writeStyled(self: *Screen, text: []const u8, style: Style) void
 pub fn clearToEndOfLine(self: *Screen) void
+pub fn fillToEndOfLine(self: *Screen, style: Style) void
 pub fn showCursor(self: *Screen, row: u16, col: u16) void
 pub fn setSynchronizedOutput(self: *Screen, enabled: bool) void
 pub fn setRepeatSequences(self: *Screen, enabled: bool) void
@@ -259,6 +282,11 @@ the changed cells to the terminal in a single write.
 
 `showCursor` sets the cursor position for `present()`. If it is not called, the
 cursor stays hidden.
+
+`fillToEndOfLine` writes explicit spaces in the supplied style without moving
+the logical cursor. Use it for full-width highlighted or colored rows.
+`clearToEndOfLine` instead restores true blanks in the terminal's default
+style.
 
 ### `Style` and `Color`
 
@@ -310,6 +338,13 @@ usually updates two rows.
 
 The grids, text storage, and ANSI output buffer are reused. Steady-state frames
 do not allocate. A resize clears and repaints the screen once.
+
+To highlight a complete row, draw its text and then fill its remaining cells:
+
+```zig
+screen.writeStyled(label, selected_style);
+screen.fillToEndOfLine(selected_style);
+```
 
 Long runs of styled spaces can be compressed into a REP sequence (`CSI Ps b`),
 which saves under 100 bytes on a typical frame. It is off by default: a

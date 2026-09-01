@@ -37,34 +37,34 @@ fn apply(m: *app.Model, effect: app.Effect) void {
 test "the cursor clamps at both ends and does not wrap" {
     var m = model(24);
     _ = press(&m, &.{.up});
-    try expectEqual(@as(usize, 0), m.cursor);
+    try expectEqual(@as(usize, 0), m.viewport.cursor);
 
     _ = press(&m, &.{ .end, .down, .down });
-    try expectEqual(m.count - 1, m.cursor);
+    try expectEqual(m.count - 1, m.viewport.cursor);
 }
 
 test "j and k move like the arrows" {
     var m = model(24);
     _ = press(&m, &.{ ch('j'), ch('j') });
-    try expectEqual(@as(usize, 2), m.cursor);
+    try expectEqual(@as(usize, 2), m.viewport.cursor);
     _ = press(&m, &.{ch('k')});
-    try expectEqual(@as(usize, 1), m.cursor);
+    try expectEqual(@as(usize, 1), m.viewport.cursor);
 }
 
 test "g and G jump to the ends" {
     var m = model(24);
     _ = press(&m, &.{ch('G')});
-    try expectEqual(m.count - 1, m.cursor);
+    try expectEqual(m.count - 1, m.viewport.cursor);
     _ = press(&m, &.{ch('g')});
-    try expectEqual(@as(usize, 0), m.cursor);
+    try expectEqual(@as(usize, 0), m.viewport.cursor);
 }
 
 test "paging does not overshoot the list" {
     var m = model(8);
     _ = press(&m, &.{ .page_down, .page_down, .page_down, .page_down });
-    try expectEqual(m.count - 1, m.cursor);
+    try expectEqual(m.count - 1, m.viewport.cursor);
     _ = press(&m, &.{ .page_up, .page_up, .page_up, .page_up });
-    try expectEqual(@as(usize, 0), m.cursor);
+    try expectEqual(@as(usize, 0), m.viewport.cursor);
 }
 
 test "the cursor stays inside the viewport after every step" {
@@ -78,15 +78,15 @@ test "the cursor stays inside the viewport after every step" {
     for (seq) |k| {
         _ = press(&m, &.{k});
         const rows = m.listRows();
-        try expect(m.cursor >= m.scroll);
-        try expect(m.cursor < m.scroll + rows);
+        try expect(m.viewport.cursor >= m.viewport.offset);
+        try expect(m.viewport.cursor < m.viewport.offset + rows);
     }
 }
 
 test "a short list never scrolls" {
     var m = model(24); // more rows than entries
     _ = press(&m, &.{.end});
-    try expectEqual(@as(usize, 0), m.scroll);
+    try expectEqual(@as(usize, 0), m.viewport.offset);
 }
 
 // --- selection ---------------------------------------------------------------
@@ -214,7 +214,7 @@ test "naming a multi-entry selection targets the cursor entry" {
 
     _ = press(&m, &.{ ch('h'), ch('i') });
     apply(&m, press(&m, &.{.enter}));
-    try expectEqualStrings("hi", m.entries[m.cursor].name().?);
+    try expectEqualStrings("hi", m.entries[m.viewport.cursor].name().?);
     try expect(m.entries[0].name() == null);
 }
 
@@ -273,7 +273,7 @@ test "cursor and selection are normalised after entries disappear" {
     _ = press(&m, &.{ch('d')});
     apply(&m, press(&m, &.{ch('y')}));
     // The cursor was on the last entry, which is now gone.
-    try expect(m.cursor < m.count);
+    try expect(m.viewport.cursor < m.count);
     try expect(m.selection == .none);
 }
 
@@ -400,6 +400,6 @@ test "a resize keeps the cursor visible" {
     var m = model(24);
     _ = press(&m, &.{.end});
     _ = app.update(&m, .{ .terminal = .{ .resize = .{ .rows = 6, .cols = 40 } } });
-    try expect(m.cursor >= m.scroll);
-    try expect(m.cursor < m.scroll + m.listRows());
+    try expect(m.viewport.cursor >= m.viewport.offset);
+    try expect(m.viewport.cursor < m.viewport.offset + m.listRows());
 }

@@ -175,6 +175,20 @@ pub const Screen = struct {
         while (col < self.size.cols) : (col += 1) self.clearGlyph(self.index(self.row, col));
     }
 
+    /// Fill the rest of the current row with explicit styled spaces without
+    /// changing the logical cursor or current drawing style.
+    pub fn fillToEndOfLine(self: *Screen, style: Style) void {
+        if (self.err != null or self.offScreen()) return;
+        const saved_row = self.row;
+        const saved_col = self.col;
+        const saved_style = self.draw_style;
+        while (self.col < self.size.cols and self.err == null)
+            self.putGlyph(" ", 1, style);
+        self.row = saved_row;
+        self.col = saved_col;
+        self.draw_style = saved_style;
+    }
+
     /// Leave the terminal cursor here when the frame is presented, and make
     /// it visible. A frame that never calls this leaves it hidden.
     pub fn showCursor(self: *Screen, row: u16, col: u16) void {
