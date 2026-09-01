@@ -9,9 +9,10 @@
 //!
 //! Text for a cell lives in a per-frame byte arena. This matters for Unicode:
 //! a base codepoint and any following zero-width combining marks are retained
-//! as one cell without imposing a fixed grapheme-size limit. Wide codepoints
-//! occupy a head cell and a continuation cell, so overwrites and diffs never
-//! leave half of one on screen.
+//! as one cell, up to the `max_cell_bytes` ceiling that keeps a line of
+//! combining marks from growing one cell without bound. Wide codepoints occupy
+//! a head cell and a continuation cell, so overwrites and diffs never leave
+//! half of one on screen.
 //!
 //! Every index exposed by this API is 0-based. ANSI coordinates are converted
 //! to the terminal's 1-based convention only when a changed span is emitted.
@@ -72,10 +73,33 @@ const Cell = struct {
 
 const Cursor = struct { row: u16, col: u16 };
 
+/// Ceiling on the bytes one cell retains: a base codepoint plus the zero-width
+/// marks that combine with it.
+///
+/// A cap is needed because zero-width marks do not advance the column, so
+/// nothing else bounds them: a line of them lands in a single cell, and the
+/// arena, the diff's comparison, and the bytes pushed at the terminal all grow
+/// with the length of the input rather than with the size of the grid. A log
+/// viewer showing another program's output is exactly where such a line comes
+/// from. 32 bytes is well past any sequence a terminal will render — Unicode's
+/// own stream-safe format stops at far fewer marks — and marks beyond it are
+/// dropped, which is what the terminal would do with them anyway.
+const max_cell_bytes = 32;
+
 pub const Screen = struct {
     /// Terminal dimensions as of the last resize. Read this in `render` to lay
     /// out; it is never stale within a frame.
     size: Size,
+    /// The geometry `begin()` allocated the back grid for.
+    ///
+    /// Every index, bound, and diff below is taken against this rather than
+    /// `size`, because `size` can change part-way through a frame: `Ui`
+    /// updates it from `handleResize`, and `pollEvent` is callable at any
+    /// point. Re-reading `size` per cell would then index a grid allocated for
+    /// the old dimensions — an out-of-bounds write, not a wrong pixel. A frame
+    /// is drawn and presented with the geometry it began with; the next
+    /// `begin()` picks up the new one and repaints from a clear screen.
+    frame_size: Size = .{ .rows = 0, .cols = 0 },
 
     gpa: Allocator,
     /// Bytes emitted by the current `present()`. Exposed through `frame()` for
@@ -139,7 +163,8 @@ pub const Screen = struct {
         self.cursor = null;
         self.err = null;
 
-        const count = @as(usize, self.size.rows) * @as(usize, self.size.cols);
+        self.frame_size = self.size;
+        const count = @as(usize, self.frame_size.rows) * @as(usize, self.frame_size.cols);
         self.back.resize(self.gpa, count) catch {
             self.err = error.OutOfMemory;
             return;
@@ -172,7 +197,7 @@ pub const Screen = struct {
     pub fn clearToEndOfLine(self: *Screen) void {
         if (self.err != null or self.offScreen()) return;
         var col = self.col;
-        while (col < self.size.cols) : (col += 1) self.clearGlyph(self.index(self.row, col));
+        while (col < self.frame_size.cols) : (col += 1) self.clearGlyph(self.index(self.row, col));
     }
 
     /// Fill the rest of the current row with explicit styled spaces without
@@ -182,7 +207,7 @@ pub const Screen = struct {
         const saved_row = self.row;
         const saved_col = self.col;
         const saved_style = self.draw_style;
-        while (self.col < self.size.cols and self.err == null)
+        while (self.col < self.frame_size.cols and self.err == null)
             self.putGlyph(" ", 1, style);
         self.row = saved_row;
         self.col = saved_col;
@@ -201,8 +226,8 @@ pub const Screen = struct {
         if (self.err) |e| return e;
 
         const same_size = self.front_valid and
-            self.front_size.rows == self.size.rows and
-            self.front_size.cols == self.size.cols;
+            self.front_size.rows == self.frame_size.rows and
+            self.front_size.cols == self.frame_size.cols;
 
         if (!same_size) {
             // The previous cell coordinates no longer describe the terminal.
@@ -212,10 +237,10 @@ pub const Screen = struct {
         }
 
         var row: u16 = 0;
-        while (row < self.size.rows) : (row += 1) self.emitChangedRow(row, same_size);
+        while (row < self.frame_size.rows) : (row += 1) self.emitChangedRow(row, same_size);
 
         if (self.cursor) |c| {
-            if (c.row < self.size.rows and c.col < self.size.cols)
+            if (c.row < self.frame_size.rows and c.col < self.frame_size.cols)
                 self.print("\x1b[{d};{d}H\x1b[?25h", .{ c.row + 1, c.col + 1 });
         }
         if (self.synchronized_output) self.raw(end_sync);
@@ -234,7 +259,7 @@ pub const Screen = struct {
         // frame's immutable comparison image without copying any cells/text.
         std.mem.swap(std.ArrayList(Cell), &self.front, &self.back);
         std.mem.swap(std.ArrayList(u8), &self.front_text, &self.back_text);
-        self.front_size = self.size;
+        self.front_size = self.frame_size;
         self.front_valid = true;
     }
 
@@ -245,17 +270,19 @@ pub const Screen = struct {
 
     // --- logical frame construction --------------------------------------
 
+    /// Also true before the first `begin()`, when `frame_size` is still zero
+    /// and there is no grid to draw into.
     fn offScreen(self: *const Screen) bool {
-        return self.row >= self.size.rows or self.col >= self.size.cols;
+        return self.row >= self.frame_size.rows or self.col >= self.frame_size.cols;
     }
 
     fn index(self: *const Screen, row: u16, col: u16) usize {
-        return @as(usize, row) * @as(usize, self.size.cols) + @as(usize, col);
+        return @as(usize, row) * @as(usize, self.frame_size.cols) + @as(usize, col);
     }
 
     fn writeClipped(self: *Screen, text: []const u8, style: Style) void {
         var i: usize = 0;
-        while (i < text.len and self.col < self.size.cols) {
+        while (i < text.len and self.col < self.frame_size.cols) {
             const s = width.step(text[i..]);
             const bytes = text[i..][0..s.len];
             i += s.len;
@@ -268,7 +295,7 @@ pub const Screen = struct {
                 continue;
             }
 
-            const remaining = self.size.cols - self.col;
+            const remaining = self.frame_size.cols - self.col;
             if (s.width > remaining) {
                 // Never leave a half-wide glyph at the right edge.
                 self.putGlyph(" ", 1, style);
@@ -315,6 +342,7 @@ pub const Screen = struct {
 
         const old_off = cell.text_off;
         const old_len = cell.text_len;
+        if (old_len + bytes.len > max_cell_bytes) return;
         self.back_text.ensureUnusedCapacity(self.gpa, old_len + bytes.len) catch {
             self.err = error.OutOfMemory;
             return;
@@ -356,9 +384,9 @@ pub const Screen = struct {
     // --- diff emission ----------------------------------------------------
 
     fn emitChangedRow(self: *Screen, row: u16, compare_front: bool) void {
-        if (self.err != null or self.size.cols == 0) return;
+        if (self.err != null or self.frame_size.cols == 0) return;
         const row_start = self.index(row, 0);
-        const row_end = row_start + self.size.cols;
+        const row_end = row_start + self.frame_size.cols;
 
         var first = row_start;
         while (first < row_end and !self.cellChanged(first, compare_front)) : (first += 1) {}

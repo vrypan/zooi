@@ -362,6 +362,15 @@ usually updates two rows.
 The grids, text storage, and ANSI output buffer are reused. Steady-state frames
 do not allocate. A resize clears and repaints the screen once.
 
+`begin()` captures `size` for the whole frame. A resize that arrives part-way
+through — `pollEvent()` called mid-render, for instance — does not change the
+geometry of the frame being drawn; it takes effect at the next `begin()`, which
+repaints from a clear screen. Read `size` in `render` as usual.
+
+A cell retains its base codepoint and up to 32 bytes of combining marks. Longer
+runs of zero-width marks are dropped, so text from an untrusted source cannot
+make one cell grow without bound.
+
 To highlight a complete row, draw its text and then fill its remaining cells:
 
 ```zig

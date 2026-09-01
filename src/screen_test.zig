@@ -576,3 +576,75 @@ test "a failed present gives up the diff baseline instead of corrupting it" {
     try std.testing.expectError(error.WriteFailed, s.present());
     try expect(!s.front_valid);
 }
+
+test "a size change part-way through a frame does not reach the frame's grid" {
+    // What `Ui` does when an application calls `pollEvent` between `begin` and
+    // `present`: the field the grid was sized from changes under the frame.
+    var s = testScreen(4, 10);
+    defer s.deinit();
+    s.begin();
+    s.size = .{ .rows = 40, .cols = 100 };
+
+    // Inside the frame that began, so it lands where it was aimed.
+    s.move(3, 0);
+    s.write("kept");
+    // Outside it, so it is clipped rather than written past the allocation.
+    s.move(30, 0);
+    s.write("beyond");
+    s.move(3, 40);
+    s.write("beyond");
+
+    try s.present();
+    try expectEqual(Size{ .rows = 4, .cols = 10 }, s.front_size);
+    try expect(std.mem.indexOf(u8, body(&s), "kept") != null);
+    try expect(std.mem.indexOf(u8, body(&s), "beyond") == null);
+}
+
+test "the frame after a mid-frame size change picks up the new size" {
+    var s = testScreen(4, 10);
+    defer s.deinit();
+    s.begin();
+    s.size = .{ .rows = 2, .cols = 20 };
+    try s.present();
+    try expectEqual(Size{ .rows = 4, .cols = 10 }, s.front_size);
+
+    s.begin();
+    s.move(1, 15);
+    s.write("wide");
+    try s.present();
+    try expectEqual(Size{ .rows = 2, .cols = 20 }, s.front_size);
+    try expect(std.mem.startsWith(u8, body(&s), "\x1b[2J"));
+    try expect(std.mem.indexOf(u8, body(&s), "wide") != null);
+}
+
+test "combining marks on one cell are capped rather than retained in full" {
+    var s = testScreen(1, 4);
+    defer s.deinit();
+
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(gpa);
+    try text.appendSlice(gpa, "a");
+    for (0..10_000) |_| try text.appendSlice(gpa, "\u{0301}");
+
+    s.begin();
+    s.write(text.items);
+    try s.present();
+
+    // The base glyph and some of its marks survive; the rest is dropped, so
+    // neither the arena nor the bytes sent to the terminal track the input.
+    const cell = s.front.items[0];
+    try expect(cell.text_len > 1);
+    try expect(cell.text_len <= 32);
+    try expect(s.front_text.items.len <= 32);
+    try expect(s.frame().len < 256);
+    try expect(std.mem.startsWith(u8, s.front_text.items, "a\u{0301}"));
+}
+
+test "a combining mark still attaches when the cell has room" {
+    var s = testScreen(1, 4);
+    defer s.deinit();
+    s.begin();
+    s.write("e\u{0301}");
+    try s.present();
+    try expectEqualStrings("e\u{0301}", s.front_text.items[0..s.front.items[0].text_len]);
+}
