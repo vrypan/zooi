@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check release
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Require main
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "releases must be run from main, not $GITHUB_REF" >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v6
+
+      # Keep this in sync with build.zig.zon minimum_zig_version.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Derive release tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(sed -n 's/^[[:space:]]*\.version = "\([^"]*\)",[[:space:]]*$/\1/p' build.zig.zon)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid version in build.zig.zon: ${version:-<empty>}" >&2
+            exit 1
+          fi
+
+          tag="v${version}"
+          tools/check-version.sh "$tag"
+
+          if [[ -n "$(git ls-remote --tags origin "refs/tags/${tag}")" ]]; then
+            echo "tag already exists on origin: $tag" >&2
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check source
+        run: make check
+
+  publish:
+    name: Publish ${{ needs.check.outputs.tag }}
+    needs: check
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          previous_tag="$(git describe --tags --match 'v[0-9]*' --abbrev=0 "$GITHUB_SHA" 2>/dev/null || true)"
+          if [[ -n "$previous_tag" ]]; then
+            commit_range="${previous_tag}..${GITHUB_SHA}"
+          else
+            commit_range="$GITHUB_SHA"
+          fi
+
+          git log --reverse --format='- %s' "$commit_range" > release-notes.md
+
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes-file release-notes.md \
+            --fail-on-no-commits
