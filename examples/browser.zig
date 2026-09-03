@@ -264,6 +264,10 @@ fn normalKey(m: *Model, key: zooi.Key) Effect {
         // same thing for terminals that do not send modifiers.
         .shift_up => extend(m, -1),
         .shift_down => extend(m, 1),
+        .shift_page_up => extend(m, -@as(isize, @intCast(page))),
+        .shift_page_down => extend(m, @intCast(page)),
+        .shift_home => extendTo(m, 0),
+        .shift_end => extendTo(m, last),
 
         .escape => {
             m.selection = .none;
@@ -395,6 +399,17 @@ fn extend(m: *Model, delta: isize) void {
         } };
     }
     moveCursor(m, delta);
+}
+
+fn extendTo(m: *Model, i: usize) void {
+    if (m.count == 0) return;
+    if (m.selection != .range) {
+        m.selection = .{ .range = .{
+            .anchor = m.viewport.cursor,
+            .cursor = m.viewport.cursor,
+        } };
+    }
+    setCursor(m, i);
 }
 
 fn toggleSelect(m: *Model) void {

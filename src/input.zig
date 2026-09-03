@@ -31,6 +31,10 @@ pub const Key = union(enum) {
 
     shift_up,
     shift_down,
+    shift_page_up,
+    shift_page_down,
+    shift_home,
+    shift_end,
 
     enter,
     escape,
@@ -230,16 +234,25 @@ fn lookupCsi(params: []const u8, final: u8) ?Key {
         };
     }
 
-    // Shift is modifier 2. Only the two the spec's selection bindings need.
+    // Shift is modifier 2. Keep the supported combinations explicit until a
+    // future breaking release represents modifiers separately from key codes.
     if (eq(u8, params, "1;2")) {
         return switch (final) {
             'A' => .shift_up,
             'B' => .shift_down,
+            'H' => .shift_home,
+            'F' => .shift_end,
+            '~' => .shift_home,
             else => null,
         };
     }
 
     if (final == '~') {
+        if (eq(u8, params, "7;2")) return .shift_home;
+        if (eq(u8, params, "4;2") or eq(u8, params, "8;2")) return .shift_end;
+        if (eq(u8, params, "5;2")) return .shift_page_up;
+        if (eq(u8, params, "6;2")) return .shift_page_down;
+
         // xterm, the Linux console, and rxvt disagree about Home and End, so
         // all the spellings map.
         if (eq(u8, params, "1") or eq(u8, params, "7")) return .home;

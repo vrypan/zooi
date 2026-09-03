@@ -62,6 +62,8 @@ test "CSI sequences" {
     try expectEqual(Key.delete, one("\x1b[3~").?);
     try expectEqual(Key.shift_up, one("\x1b[1;2A").?);
     try expectEqual(Key.shift_down, one("\x1b[1;2B").?);
+    try expectEqual(Key.shift_page_up, one("\x1b[5;2~").?);
+    try expectEqual(Key.shift_page_down, one("\x1b[6;2~").?);
 }
 
 test "SS3 sequences, sent under cursor-key application mode" {
@@ -79,6 +81,35 @@ test "every spelling of Home and End" {
         try expectEqual(Key.home, one(s).?);
     for ([_][]const u8{ "\x1b[F", "\x1bOF", "\x1b[4~", "\x1b[8~" }) |s|
         try expectEqual(Key.end, one(s).?);
+}
+
+test "every supported spelling of Shift+Home and Shift+End" {
+    for ([_][]const u8{ "\x1b[1;2H", "\x1b[1;2~", "\x1b[7;2~" }) |s|
+        try expectEqual(Key.shift_home, one(s).?);
+    for ([_][]const u8{ "\x1b[1;2F", "\x1b[4;2~", "\x1b[8;2~" }) |s|
+        try expectEqual(Key.shift_end, one(s).?);
+}
+
+test "shifted navigation sequences resolve across every read boundary" {
+    const cases = [_]struct { bytes: []const u8, key: Key }{
+        .{ .bytes = "\x1b[5;2~", .key = .shift_page_up },
+        .{ .bytes = "\x1b[6;2~", .key = .shift_page_down },
+        .{ .bytes = "\x1b[1;2H", .key = .shift_home },
+        .{ .bytes = "\x1b[1;2F", .key = .shift_end },
+    };
+
+    for (cases) |case| {
+        for (1..case.bytes.len) |split| {
+            var p: Parser = .{};
+            try expect(p.feed(case.bytes[0..split]));
+            try expect(p.next() == null);
+            try expect(p.awaitingEscape());
+
+            try expect(p.feed(case.bytes[split..]));
+            try expectEqual(case.key, p.next().?);
+            try expect(!p.awaitingEscape());
+        }
+    }
 }
 
 test "a sequence split across reads resolves when the rest arrives" {

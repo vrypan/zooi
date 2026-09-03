@@ -220,6 +220,8 @@ pub const Key = union(enum) {
     up, down, left, right,
     page_up, page_down, home, end,
     shift_up, shift_down,
+    shift_page_up, shift_page_down,
+    shift_home, shift_end,
     enter, escape, backspace, delete,
     tab, shift_tab,
     character: u21,
@@ -234,7 +236,9 @@ zooi disables `ISIG`, so Ctrl-C is returned as `ctrl_c` instead of raising a
 signal. Applications must handle it.
 
 Both CSI (`ESC [ A`) and SS3 (`ESC O A`) forms are supported for arrows,
-Home, and End. Shift-Tab is read from `ESC [ Z`.
+Home, and End. Shift-Tab is read from `ESC [ Z`. Shift-modified arrows,
+PageUp/PageDown, Home, and End are returned as their corresponding `shift_*`
+variants.
 
 ### `Viewport`
 

@@ -124,6 +124,28 @@ test "shift+arrow extends a range" {
     try expect(m.selection.contains(2));
 }
 
+test "shift+page extends a range by one viewport" {
+    var m = model(8); // six list rows
+    _ = press(&m, &.{ .down, .shift_page_down });
+    try expectEqual(@as(usize, 7), m.viewport.cursor);
+    try expectEqual(@as(usize, 7), m.selection.count());
+
+    _ = press(&m, &.{.shift_page_up});
+    try expectEqual(@as(usize, 1), m.viewport.cursor);
+    try expectEqual(@as(usize, 1), m.selection.count());
+}
+
+test "shift+home and shift+end extend to the list boundaries" {
+    var m = model(8);
+    _ = press(&m, &.{ .down, .down, .shift_end });
+    try expectEqual(m.count - 1, m.viewport.cursor);
+    try expectEqual(m.count - 2, m.selection.count());
+
+    _ = press(&m, &.{.shift_home});
+    try expectEqual(@as(usize, 0), m.viewport.cursor);
+    try expectEqual(@as(usize, 3), m.selection.count());
+}
+
 test "the v anchor extends the same way" {
     // Offered for terminals that do not send modifiers.
     var m = model(24);
