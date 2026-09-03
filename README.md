@@ -43,7 +43,7 @@ zooi does not call `linkLibC()`. If the application links libc, zooi uses it.
 Add the dependency:
 
 ```sh
-zig fetch --save git+https://github.com/vrypan/zooi.git#v0.2.0
+zig fetch --save git+https://github.com/vrypan/zooi.git#v0.2.1
 ```
 
 Add the module in `build.zig`:
@@ -522,7 +522,7 @@ Known limits:
 
 ## Versioning
 
-0.1.0 was the first release. The API may change before 1.0.0. Pin the `v0.2.0`
+0.1.0 was the first release. The API may change before 1.0.0. Pin the `v0.2.1`
 tag for reproducible builds.
 
 ## License

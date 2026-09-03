@@ -20,7 +20,7 @@ verify:
 	$(ZIG) build verify && ./zig-out/bin/zooi-verify
 
 # Used by the release workflow after deriving the tag from build.zig.zon.
-# It remains available for local checks: make version-check TAG=v0.2.0
+# It remains available for local checks: make version-check TAG=v0.2.1
 version-check:
 	@tools/check-version.sh $(TAG)
 
