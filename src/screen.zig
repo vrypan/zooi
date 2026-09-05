@@ -23,7 +23,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const sys = @import("sys.zig");
-const unicode = @import("unicode/root.zig");
+const unicode = @import("zunic");
 const Size = @import("event.zig").Size;
 
 const begin_sync = "\x1b[?2026h";

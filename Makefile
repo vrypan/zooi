@@ -25,10 +25,10 @@ version-check:
 	@tools/check-version.sh $(TAG)
 
 fmt:
-	$(ZIG) fmt .
+	$(ZIG) fmt build.zig build.zig.zon src examples test
 
 fmt-check:
-	$(ZIG) fmt --check .
+	$(ZIG) fmt --check build.zig build.zig.zon src examples test
 
 # The gates every change has to pass.
 check: fmt-check test

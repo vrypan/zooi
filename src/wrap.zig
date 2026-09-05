@@ -1,5 +1,6 @@
 //! Allocation-free grapheme-safe terminal wrapping.
-const unicode = @import("unicode/root.zig");
+const std = @import("std");
+const unicode = @import("zunic");
 
 pub const Mode = enum { cell, word };
 pub const Kind = enum { text, replacement };
@@ -14,7 +15,12 @@ pub const Error = error{ZeroColumns};
 
 pub fn iterator(text: []const u8, columns: usize, mode: Mode) Error!Iterator {
     if (columns == 0) return error.ZeroColumns;
-    return .{ .text = text, .columns = columns, .mode = mode };
+    return .{
+        .text = text,
+        .columns = columns,
+        .mode = mode,
+        .breaks = unicode.line_break.iterator(text),
+    };
 }
 
 pub const Iterator = struct {
@@ -24,6 +30,9 @@ pub const Iterator = struct {
     pos: usize = 0,
     emitted_empty_input: bool = false,
     final_empty: bool = false,
+    // This is advanced only as the wrapper commits text. A saved copy lets
+    // word wrapping roll back to its last legal break without re-scanning.
+    breaks: unicode.line_break.Iterator,
 
     pub fn next(self: *Iterator) ?Fragment {
         if (self.pos >= self.text.len) {
@@ -42,6 +51,8 @@ pub const Iterator = struct {
         var used: usize = 0;
         var allowed_end: ?usize = null;
         var allowed_columns: usize = 0;
+        var breaks = self.breaks;
+        var allowed_breaks: ?unicode.line_break.Iterator = null;
 
         while (clusters.next()) |relative| {
             const span = .{ .start = line_start + relative.start, .end = line_start + relative.end };
@@ -73,6 +84,7 @@ pub const Iterator = struct {
                 }
                 if (self.mode == .word) if (allowed_end) |break_end| {
                     self.pos = break_end;
+                    self.breaks = allowed_breaks.?;
                     return .{ .start = start, .end = break_end, .columns = allowed_columns, .kind = .text };
                 };
                 self.pos = end;
@@ -82,9 +94,13 @@ pub const Iterator = struct {
             used += cluster_columns;
             end = span.end;
             self.pos = span.end;
-            if (self.mode == .word and unicode.line_break.after(bytes) == .allowed) {
-                allowed_end = end;
-                allowed_columns = used;
+            if (self.mode == .word) {
+                if (opportunityAt(&breaks, end) == .allowed) {
+                    allowed_end = end;
+                    allowed_columns = used;
+                    allowed_breaks = breaks;
+                }
+                self.breaks = breaks;
             }
             if (used == self.columns) {
                 // Consume an adjacent line terminator so an exact-width line
@@ -108,5 +124,22 @@ pub const Iterator = struct {
 };
 
 fn isMandatoryBreak(bytes: []const u8) bool {
-    return bytes.len > 0 and (bytes[0] == '\n' or (bytes[0] == '\r' and bytes.len > 1 and bytes[1] == '\n'));
+    return std.mem.eql(u8, bytes, "\n") or
+        std.mem.eql(u8, bytes, "\r") or
+        std.mem.eql(u8, bytes, "\r\n") or
+        std.mem.eql(u8, bytes, "\xc2\x85") or // NEL
+        std.mem.eql(u8, bytes, "\xe2\x80\xa8") or // LS
+        std.mem.eql(u8, bytes, "\xe2\x80\xa9"); // PS
+}
+
+/// Return the UAX #14 opportunity immediately after `offset`. The iterator
+/// reports boundaries before scalars, so this consumes through the next
+/// scalar's start (or the input's final boundary).
+fn opportunityAt(breaks: *unicode.line_break.Iterator, offset: usize) unicode.line_break.Opportunity {
+    while (breaks.next()) |boundary| {
+        if (boundary.offset >= offset) {
+            return if (boundary.offset == offset) boundary.opportunity else .prohibited;
+        }
+    }
+    return .prohibited;
 }

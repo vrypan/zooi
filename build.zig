@@ -4,9 +4,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const zunic = b.dependency("zunic", .{});
+
     const zooi_mod = b.addModule("zooi", .{
         .root_source_file = b.path("src/zooi.zig"),
     });
+    zooi_mod.addImport("zunic", zunic.module("zunic"));
 
     const example = b.addExecutable(.{
         .name = "zooi-browser",
@@ -76,6 +79,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
         test_mod.addImport("zooi", zooi_mod);
+        test_mod.addImport("zunic", zunic.module("zunic"));
 
         const tests = b.addTest(.{ .root_module = test_mod });
         test_step.dependOn(&b.addRunArtifact(tests).step);

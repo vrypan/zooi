@@ -10,7 +10,7 @@
 //! points available. New layout and rendering code use `unicode.width`, whose
 //! cluster policy is also used by `Screen`.
 
-const unicode = @import("unicode/root.zig");
+const unicode = @import("zunic");
 
 /// Columns a codepoint occupies: 0 for combining marks and format characters,
 /// 2 for East Asian wide and fullwidth, 1 otherwise.

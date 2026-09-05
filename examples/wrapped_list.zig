@@ -2,16 +2,48 @@
 const std = @import("std");
 const zooi = @import("zooi");
 
+/// Produce an ASCII paragraph with an exact terminal-column length. Keeping
+/// these samples generated makes their intended size obvious without making
+/// the example source mostly repeated prose.
+fn sampleText(comptime label: []const u8, comptime columns: usize) [columns]u8 {
+    @setEvalBranchQuota(10_000);
+    if (label.len > columns) @compileError("sample label exceeds its requested width");
+
+    var text: [columns]u8 = undefined;
+    var pos: usize = 0;
+    for (label) |byte| {
+        text[pos] = byte;
+        pos += 1;
+    }
+
+    const filler = "wrap this text across the viewport. ";
+    while (pos < text.len) {
+        for (filler) |byte| {
+            if (pos == text.len) break;
+            text[pos] = byte;
+            pos += 1;
+        }
+    }
+    return text;
+}
+
+const sample_200 = sampleText("200-column sample: ", 200);
+const sample_500 = sampleText("500-column sample: ", 500);
+const sample_1000 = sampleText("1000-column sample: ", 1000);
+
 const items = [_][]const u8{
     "A short item.",
     "Accented cafe\u{301}, wide 世界, and an emoji sequence 👩‍💻 stay intact at a wrap boundary.",
     "A deliberately long unbroken token: supercalifragilisticexpialidocious.",
     "First logical line.\n\nA blank line is a visual row too.",
-    "This item is intentionally long enough to be taller than a small terminal. It demonstrates that PageDown moves through visual rows, while Up and Down select logical items.",
+    sample_200[0..],
+    sample_500[0..],
+    sample_1000[0..],
 };
 
 const Cache = struct {
-    fragments: [128]zooi.wrap.Fragment = undefined,
+    // At one column, the 1,000-column sample alone needs 1,000 fragments.
+    fragments: [4096]zooi.wrap.Fragment = undefined,
     heights: [items.len]usize = undefined,
     offsets: [items.len + 1]usize = undefined,
     starts: [items.len]usize = undefined,

@@ -3,7 +3,12 @@
     .version = "0.2.1",
     .fingerprint = 0xb046bd6de056df73,
     .minimum_zig_version = "0.16.0",
-    .dependencies = .{},
+    .dependencies = .{
+        .zunic = .{
+            .url = "git+https://github.com/vrypan/zunic#c89459da3d88be66c68751d5bc079d65d66add7d",
+            .hash = "zunic-0.2.0-yeyUTXBQeQBCbcoLqnFqsw6Z7bf1DH36XmCDuSknx23i",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",

@@ -32,7 +32,8 @@ component library. See [Non-goals](#non-goals).
 ## Requirements
 
 - Zig **0.16.0**
-- No third-party dependencies
+- [`zunic`](https://github.com/vrypan/zunic), fetched automatically as a
+  pinned Zig package dependency
 - No libc on Linux. Calls use `std.posix` or `std.os.linux` when Zig has no
   POSIX wrapper. macOS uses `libSystem`.
 
@@ -53,9 +54,9 @@ const zooi = b.dependency("zooi", .{});
 exe.root_module.addImport("zooi", zooi.module("zooi"));
 ```
 
-To vendor zooi, copy `src/` and use `src/zooi.zig` as the module root. See
-[`examples/minimal`](examples/minimal) for a complete consumer project with its
-own `build.zig`, `build.zig.zon`, and `src/main.zig`.
+Use Zig's package support rather than copying `src/`: zooi also depends on
+zunic. See [`examples/minimal`](examples/minimal) for a complete consumer
+project with its own `build.zig`, `build.zig.zon`, and `src/main.zig`.
 
 ## Try it
 
@@ -76,6 +77,8 @@ zig build run-wrapped
 ```
 
 Its source is `examples/wrapped_list.zig`.
+It includes labeled 200-, 500-, and 1,000-column samples so a normal terminal
+shows multiple visual rows and makes PageUp/PageDown useful.
 
 ## Quick start
 
@@ -277,8 +280,8 @@ range is empty. `Range.end` is exclusive.
 `wrap.iterator` splits borrowed text into visual-row fragments. Fragment
 offsets are byte offsets into the original text, while `columns` is a terminal
 cell count. It allocates nothing. Cell mode is the direct, greedy choice; word
-mode prefers a break after whitespace and otherwise falls back to a grapheme
-boundary.
+mode follows the default Unicode line-break opportunities and otherwise falls
+back to a grapheme boundary.
 
 ```zig
 var fragments = try zooi.wrap.iterator(label, available_columns, .word);
@@ -569,10 +572,9 @@ watching, plugins, themes, configurable key bindings, or multiple panes.
 
 Known limits:
 
-- **Unicode line breaking is conservative.** Grapheme segmentation and emoji
-  width are handled, but word mode currently treats whitespace as its optional
-  break opportunity. It does not yet apply the complete UAX #14 line-breaking
-  rules or dictionary segmentation.
+- **Unicode line breaking uses default UAX #14 rules.** It does not apply
+  locale tailoring or dictionary segmentation for complex South East Asian
+  scripts.
 - **The retained grid is not application state.** Tests can inspect the last
   successfully presented frame through a read-only diagnostic view, but
   production code should not recover its model from rendered cells.
