@@ -1,6 +1,5 @@
 const std = @import("std");
 const width = @import("width.zig");
-const table = @import("unicode/tables.zig");
 
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
@@ -35,19 +34,6 @@ test "combining marks are zero columns" {
 test "U+00AD is the exception to the format-character rule" {
     // Category Cf, but terminals draw it, so it must not be zero.
     try expectEqual(@as(u2, 1), width.codepointWidth(0x00AD));
-}
-
-test "table invariants hold" {
-    // A binary search is only correct over sorted, disjoint ranges.
-    for ([_][]const table.Range{ &table.zero_width, &table.wide }) |ranges| {
-        try expect(ranges.len > 0);
-        var prev_hi: i32 = -1;
-        for (ranges) |r| {
-            try expect(r.lo <= r.hi);
-            try expect(@as(i32, r.lo) > prev_hi);
-            prev_hi = @intCast(r.hi);
-        }
-    }
 }
 
 test "step advances one codepoint at a time" {

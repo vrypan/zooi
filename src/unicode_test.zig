@@ -1,5 +1,5 @@
 const std = @import("std");
-const unicode = @import("unicode/root.zig");
+const unicode = @import("zunic");
 
 test "invalid UTF-8 always makes progress" {
     const bytes = [_]u8{ 0xff, 0xe2, 0x82, 'x' };

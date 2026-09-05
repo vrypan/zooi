@@ -64,8 +64,6 @@ pub fn build(b: *std.Build) void {
         "src/variable_viewport_test.zig",
         "src/wrap_test.zig",
         "src/unicode_test.zig",
-        "src/unicode/root_test.zig",
-        "src/unicode/conformance_test.zig",
         "src/testing_test.zig",
         "src/terminal_test.zig",
         "src/event_test.zig",
