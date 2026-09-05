@@ -1,0 +1,45 @@
+const std = @import("std");
+const wrap = @import("wrap.zig");
+
+fn expectFragment(it: *wrap.Iterator, text: []const u8, expected: []const u8, columns: usize) !void {
+    const fragment = it.next().?;
+    try std.testing.expectEqual(wrap.Kind.text, fragment.kind);
+    try std.testing.expectEqualStrings(expected, text[fragment.start..fragment.end]);
+    try std.testing.expectEqual(columns, fragment.columns);
+}
+
+test "cell wrapping retains complete grapheme clusters" {
+    const text = "a e\u{301} 世";
+    var it = try wrap.iterator(text, 2, .cell);
+    try expectFragment(&it, text, "a ", 2);
+    try expectFragment(&it, text, "e\u{301} ", 2);
+    try expectFragment(&it, text, "世", 2);
+    try std.testing.expect(it.next() == null);
+}
+
+test "wrapping handles forced lines and final empty lines" {
+    const text = "ab\ncd\n";
+    var it = try wrap.iterator(text, 2, .cell);
+    try expectFragment(&it, text, "ab", 2);
+    try expectFragment(&it, text, "cd", 2);
+    try expectFragment(&it, text, "", 0);
+    try std.testing.expect(it.next() == null);
+}
+
+test "an exact-width row does not consume the next text cluster" {
+    const text = "abx";
+    var it = try wrap.iterator(text, 2, .cell);
+    try expectFragment(&it, text, "ab", 2);
+    try expectFragment(&it, text, "x", 1);
+    try std.testing.expect(it.next() == null);
+}
+
+test "narrow rows replace one too-wide cluster" {
+    const text = "世x";
+    var it = try wrap.iterator(text, 1, .cell);
+    const replacement = it.next().?;
+    try std.testing.expectEqual(wrap.Kind.replacement, replacement.kind);
+    try std.testing.expectEqualStrings("世", text[replacement.start..replacement.end]);
+    try expectFragment(&it, text, "x", 1);
+    try std.testing.expectError(error.ZeroColumns, wrap.iterator(text, 0, .cell));
+}

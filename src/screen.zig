@@ -8,11 +8,10 @@
 //! two short row updates rather than a complete terminal repaint.
 //!
 //! Text for a cell lives in a per-frame byte arena. This matters for Unicode:
-//! a base codepoint and any following zero-width combining marks are retained
-//! as one cell, up to the `max_cell_bytes` ceiling that keeps a line of
-//! combining marks from growing one cell without bound. Wide codepoints occupy
-//! a head cell and a continuation cell, so overwrites and diffs never leave
-//! half of one on screen.
+//! one grapheme cluster is retained per cell, up to the `max_cell_bytes`
+//! ceiling that keeps unbounded combining input from growing one cell without
+//! bound. Wide clusters occupy a head cell and a continuation cell, so
+//! overwrites and diffs never leave half of one on screen.
 //!
 //! Every index exposed by this API is 0-based. ANSI coordinates are converted
 //! to the terminal's 1-based convention only when a changed span is emitted.
@@ -24,7 +23,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const sys = @import("sys.zig");
-const width = @import("width.zig");
+const unicode = @import("unicode/root.zig");
 const Size = @import("event.zig").Size;
 
 const begin_sync = "\x1b[?2026h";
@@ -285,30 +284,53 @@ pub const Screen = struct {
     }
 
     fn writeClipped(self: *Screen, text: []const u8, style: Style) void {
-        var i: usize = 0;
-        while (i < text.len and self.col < self.frame_size.cols) {
-            const s = width.step(text[i..]);
-            const bytes = text[i..][0..s.len];
-            i += s.len;
-
-            const cp = s.cp orelse continue;
-            if (cp < 0x20 or cp == 0x7f) continue;
-
-            if (s.width == 0) {
-                self.appendCombining(bytes);
+        var clusters = unicode.grapheme.iterator(text);
+        while (clusters.next()) |span| {
+            const bytes = text[span.start..span.end];
+            const measure = unicode.width.measureCluster(bytes);
+            if (measure.columns == 0) {
+                if (isAttachable(bytes)) self.appendCombining(bytes);
                 continue;
             }
 
+            const replacement = measure.columns == 3;
+            const columns: u2 = if (replacement) 1 else @intCast(measure.columns);
+            if (self.col >= self.frame_size.cols) return;
             const remaining = self.frame_size.cols - self.col;
-            if (s.width > remaining) {
+            if (columns > remaining) {
                 // Never leave a half-wide glyph at the right edge.
                 self.putGlyph(" ", 1, style);
                 return;
             }
-
-            self.putGlyph(bytes, s.width, style);
+            self.putGlyph(if (replacement) "?" else cappedCluster(bytes), columns, style);
             if (self.err != null) return;
         }
+    }
+
+    fn cappedCluster(bytes: []const u8) []const u8 {
+        if (bytes.len <= max_cell_bytes) return bytes;
+        var end: usize = 0;
+        while (end < bytes.len) {
+            const step = unicode.utf8.step(bytes[end..]);
+            if (end + step.len > max_cell_bytes) break;
+            end += step.len;
+        }
+        return bytes[0..end];
+    }
+
+    /// Preserve the long-standing behavior where a caller can write a base
+    /// and its marks in separate calls, without ever appending controls or
+    /// malformed input to an existing cell.
+    fn isAttachable(bytes: []const u8) bool {
+        var pos: usize = 0;
+        while (pos < bytes.len) {
+            const step = unicode.utf8.step(bytes[pos..]);
+            pos += step.len;
+            const cp = step.cp orelse return false;
+            if (cp < 0x20 or cp == 0x7f or unicode.width.codepointWidth(cp) != 0)
+                return false;
+        }
+        return bytes.len > 0;
     }
 
     fn putGlyph(self: *Screen, bytes: []const u8, columns: u2, style: Style) void {

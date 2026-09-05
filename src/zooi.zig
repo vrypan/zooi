@@ -17,6 +17,9 @@ pub const Screen = @import("screen.zig").Screen;
 pub const Style = @import("screen.zig").Style;
 pub const Color = @import("screen.zig").Color;
 pub const Viewport = @import("viewport.zig").Viewport;
+pub const RowIndex = @import("row_index.zig").RowIndex;
+pub const VariableViewport = @import("variable_viewport.zig").VariableViewport;
+pub const wrap = @import("wrap.zig");
 pub const testing = @import("testing.zig");
 pub const restore = @import("terminal.zig").restore;
 

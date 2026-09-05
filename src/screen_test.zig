@@ -243,6 +243,36 @@ test "combining marks are retained with their base cell" {
     try expectEqualStrings(preamble ++ end_sync, s.frame());
 }
 
+test "a complete emoji cluster occupies one two-column cell" {
+    var s = testScreen(1, 4);
+    defer s.deinit();
+    s.begin();
+    s.write("👩‍💻x");
+    try s.present();
+    try expect(std.mem.indexOf(u8, body(&s), "👩‍💻x") != null);
+    try expectEqual(@as(u2, 2), s.front.items[0].columns);
+    try expect(s.front.items[1].continuation);
+}
+
+test "combining marks survive a base at the right edge" {
+    var s = testScreen(1, 1);
+    defer s.deinit();
+    s.begin();
+    s.write("e\u{301}");
+    try s.present();
+    try expect(std.mem.indexOf(u8, body(&s), "e\u{301}") != null);
+}
+
+test "a mark in a later write still attaches to the preceding base" {
+    var s = testScreen(1, 2);
+    defer s.deinit();
+    s.begin();
+    s.write("e");
+    s.write("\u{301}");
+    try s.present();
+    try expect(std.mem.indexOf(u8, body(&s), "e\u{301}") != null);
+}
+
 test "writes to an off-screen row produce no cells" {
     var s = testScreen(3, 80);
     defer s.deinit();

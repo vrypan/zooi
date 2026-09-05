@@ -69,6 +69,14 @@ Use `j`/`k` or the arrow keys to move. `space` selects, `v` starts a range,
 `p` pins, `t` tags, `n` names, `d` deletes, `Enter` inspects, and `q` quits.
 The source is `examples/browser.zig`.
 
+For a variable-height list whose items wrap across terminal rows, run:
+
+```sh
+zig build run-wrapped
+```
+
+Its source is `examples/wrapped_list.zig`.
+
 ## Quick start
 
 This program draws a list, moves a cursor, and quits on `q`:
@@ -264,6 +272,55 @@ cursor visible. An empty list resets both fields to zero. With zero visible
 rows the cursor remains clamped, `offset` equals the cursor, and the returned
 range is empty. `Range.end` is exclusive.
 
+### Wrapped text and variable-height lists
+
+`wrap.iterator` splits borrowed text into visual-row fragments. Fragment
+offsets are byte offsets into the original text, while `columns` is a terminal
+cell count. It allocates nothing. Cell mode is the direct, greedy choice; word
+mode prefers a break after whitespace and otherwise falls back to a grapheme
+boundary.
+
+```zig
+var fragments = try zooi.wrap.iterator(label, available_columns, .word);
+while (fragments.next()) |fragment| {
+    screen.move(row, 0);
+    if (fragment.kind == .replacement) {
+        screen.write("?");
+    } else {
+        screen.write(label[fragment.start..fragment.end]);
+    }
+    row += 1;
+}
+```
+
+The iterator never splits a grapheme cluster. Newlines create rows; malformed
+UTF-8, tabs, other controls, and leading orphan marks take no cells. A cluster
+that cannot fit is returned as `.replacement`, which occupies one cell.
+
+`RowIndex` maps logical items to their wrapped row ranges using caller-owned
+prefix storage. `VariableViewport` then keeps one selected visual row visible
+without changing the existing item-based `Viewport` API.
+
+```zig
+const heights = [_]usize{ 2, 1, 4 };
+var offsets: [heights.len + 1]usize = undefined;
+const index = try zooi.RowIndex.build(&heights, &offsets);
+var view: zooi.VariableViewport = .{};
+view.moveRows(1, index, terminal_rows);
+
+var visible = view.visibleItems(index, terminal_rows);
+while (visible.next()) |item| {
+    // item.first_row, item.row_count, and item.screen_row identify the
+    // already-cached fragments that belong on screen.
+}
+```
+
+The index borrows its offset storage. Rebuild both the fragment cache and the
+index when text or available columns change; moving the cursor needs neither.
+`cursor` selects a logical item, while `row_in_item` identifies its focused
+visual row. `moveItems` resets that row when selection changes; `moveRows` and
+`page` move through visual rows.
+
 ### `Screen`
 
 ```zig
@@ -344,9 +401,10 @@ failed one. `inspectCell` also returns `null` outside the presented size.
 pub fn displayWidth(text: []const u8) usize
 ```
 
-Returns the number of terminal columns used by a string. For example, `é` uses
-one column, `世` uses two, and a combining mark uses none. Width is calculated
-per codepoint; see [Non-goals](#non-goals).
+Returns the number of terminal columns used by a string after the same
+filtering and grapheme grouping as `Screen`. For example, `é` uses one column,
+`世` uses two, and `👩‍💻` uses two. Malformed UTF-8 and controls use no
+columns.
 
 ### `restore()`
 
@@ -371,9 +429,10 @@ through — `pollEvent()` called mid-render, for instance — does not change th
 geometry of the frame being drawn; it takes effect at the next `begin()`, which
 repaints from a clear screen. Read `size` in `render` as usual.
 
-A cell retains its base codepoint and up to 32 bytes of combining marks. Longer
-runs of zero-width marks are dropped, so text from an untrusted source cannot
-make one cell grow without bound.
+A cell retains one grapheme cluster, with a 32-byte storage limit. Longer
+clusters are truncated at a UTF-8 boundary, so text from an untrusted source
+cannot make one cell grow without bound. Emoji ZWJ sequences and flags are
+placed as one two-column cluster.
 
 To highlight a complete row, draw its text and then fill its remaining cells:
 
@@ -393,9 +452,9 @@ frames until `present()` writes the closing sequence. Other terminals normally
 ignore the mode. Set `synchronized_output = false` if needed.
 
 Clipping uses terminal columns, not byte length. Text past the right edge is
-truncated. A wide character that would cross the edge is replaced with a space.
-Writes outside the screen are ignored. Control bytes, malformed UTF-8, and
-newlines are dropped.
+truncated. A two-column cluster that would cross the edge is replaced with a
+space. Writes outside the screen are ignored. Control bytes, malformed UTF-8,
+and newlines are dropped.
 
 The application decides how to handle a terminal that is too small.
 
@@ -510,9 +569,10 @@ watching, plugins, themes, configurable key bindings, or multiple panes.
 
 Known limits:
 
-- **Unicode width is per-codepoint.** Combining marks and East Asian widths are
-  handled; grapheme clusters, ZWJ emoji sequences, and variation selectors are
-  not. A family emoji built from several people and ZWJs will measure wrong.
+- **Unicode line breaking is conservative.** Grapheme segmentation and emoji
+  width are handled, but word mode currently treats whitespace as its optional
+  break opportunity. It does not yet apply the complete UAX #14 line-breaking
+  rules or dictionary segmentation.
 - **The retained grid is not application state.** Tests can inspect the last
   successfully presented frame through a read-only diagnostic view, but
   production code should not recover its model from rendered cells.

@@ -1,6 +1,6 @@
 const std = @import("std");
 const width = @import("width.zig");
-const table = @import("width_table.zig");
+const table = @import("unicode/tables.zig");
 
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
@@ -77,15 +77,15 @@ test "step always advances" {
     for (inputs) |s| try expect(width.step(s).len >= 1);
 }
 
-test "invalid UTF-8 counts one column per bad byte" {
-    try expectEqual(@as(usize, 2), width.strWidth("\xff\xfe"));
+test "invalid UTF-8 is ignored to match Screen" {
+    try expectEqual(@as(usize, 0), width.strWidth("\xff\xfe"));
 }
 
 test "a truncated sequence does not read past the end" {
     // "\xe4\xb8" is the first two bytes of a three-byte character. A decoder
     // that trusts utf8ByteSequenceLength without checking what remains reads
     // out of bounds here.
-    try expectEqual(@as(usize, 2), width.strWidth("\xe4\xb8"));
+    try expectEqual(@as(usize, 0), width.strWidth("\xe4\xb8"));
 }
 
 test "invalid bytes never stall the scan" {

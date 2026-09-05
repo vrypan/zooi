@@ -19,8 +19,22 @@ pub fn build(b: *std.Build) void {
     example.root_module.addImport("zooi", zooi_mod);
     b.installArtifact(example);
 
+    const wrapped_example = b.addExecutable(.{
+        .name = "zooi-wrapped-list",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/wrapped_list.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    wrapped_example.root_module.addImport("zooi", zooi_mod);
+    b.installArtifact(wrapped_example);
+
     const run_step = b.step("run", "Run the example browser");
     run_step.dependOn(&b.addRunArtifact(example).step);
+
+    const run_wrapped_step = b.step("run-wrapped", "Run the wrapped-list example");
+    run_wrapped_step.dependOn(&b.addRunArtifact(wrapped_example).step);
 
     const test_step = b.step("test", "Run library tests");
 
@@ -43,10 +57,17 @@ pub fn build(b: *std.Build) void {
         "src/input_test.zig",
         "src/screen_test.zig",
         "src/viewport_test.zig",
+        "src/row_index_test.zig",
+        "src/variable_viewport_test.zig",
+        "src/wrap_test.zig",
+        "src/unicode_test.zig",
+        "src/unicode/root_test.zig",
+        "src/unicode/conformance_test.zig",
         "src/testing_test.zig",
         "src/terminal_test.zig",
         "src/event_test.zig",
         "examples/browser_test.zig",
+        "examples/wrapped_list_test.zig",
     };
     for (roots) |root| {
         const test_mod = b.createModule(.{

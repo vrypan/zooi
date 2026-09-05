@@ -6,61 +6,23 @@
 //! below it, and produces no error to search for — which is why every write in
 //! screen.zig measures through this module.
 //!
-//! **Scope.** Width is decided per codepoint. Grapheme clusters, ZWJ emoji
-//! sequences, regional-indicator flags, and variation selectors are out of
-//! scope: a family emoji built from several people and ZWJs measures as the sum
-//! of its parts and will render wrong. That is the documented v1 boundary, not
-//! an oversight.
+//! This compatibility facade keeps the original codepoint-oriented entry
+//! points available. New layout and rendering code use `unicode.width`, whose
+//! cluster policy is also used by `Screen`.
 
-const std = @import("std");
-const table = @import("width_table.zig");
+const unicode = @import("unicode/root.zig");
 
 /// Columns a codepoint occupies: 0 for combining marks and format characters,
 /// 2 for East Asian wide and fullwidth, 1 otherwise.
 pub fn codepointWidth(cp: u21) u2 {
-    // Fast path: ASCII printables are the overwhelming majority of what a
-    // terminal application draws, and none of them are in either table.
-    if (cp < 0x300) return 1;
-    if (inRanges(&table.zero_width, cp)) return 0;
-    if (inRanges(&table.wide, cp)) return 2;
-    return 1;
+    return unicode.width.codepointWidth(cp);
 }
 
-fn inRanges(ranges: []const table.Range, cp: u21) bool {
-    var lo: usize = 0;
-    var hi: usize = ranges.len;
-    while (lo < hi) {
-        const mid = lo + (hi - lo) / 2;
-        const r = ranges[mid];
-        if (cp < r.lo) {
-            hi = mid;
-        } else if (cp > r.hi) {
-            lo = mid + 1;
-        } else {
-            return true;
-        }
-    }
-    return false;
-}
-
-/// Columns a UTF-8 string occupies. Invalid bytes count as one column each,
-/// matching what a terminal does with them: a journal can contain arbitrary
-/// bytes from arbitrary programs, and a measurement that can fail would turn
-/// every render into an error path for no benefit.
-///
-/// Control characters are counted the same way, at one column each. `Screen`
-/// drops them instead of drawing them, so a string measured here and then
-/// written there comes up short by one column per control byte. Strip them
-/// before laying out text that has to line up.
+/// Columns a UTF-8 string occupies after the same filtering and grapheme
+/// policy as `Screen`. Invalid bytes and controls take no cells, so text that
+/// is measured here and then drawn remains aligned.
 pub fn strWidth(bytes: []const u8) usize {
-    var total: usize = 0;
-    var i: usize = 0;
-    while (i < bytes.len) {
-        const s2 = step(bytes[i..]);
-        total += s2.width;
-        i += s2.len;
-    }
-    return total;
+    return unicode.width.textWidth(bytes);
 }
 
 pub const Step = struct {
@@ -85,10 +47,6 @@ pub const Step = struct {
 /// counting columns, and a function returning only a prefix length cannot
 /// express that.
 pub fn step(bytes: []const u8) Step {
-    const n = std.unicode.utf8ByteSequenceLength(bytes[0]) catch
-        return .{ .len = 1, .width = 1, .cp = null };
-    if (n > bytes.len) return .{ .len = 1, .width = 1, .cp = null };
-    const cp = std.unicode.utf8Decode(bytes[0..n]) catch
-        return .{ .len = 1, .width = 1, .cp = null };
-    return .{ .len = n, .width = codepointWidth(cp), .cp = cp };
+    const s = unicode.utf8.step(bytes);
+    return .{ .len = s.len, .width = if (s.cp) |cp| codepointWidth(cp) else 1, .cp = s.cp };
 }
