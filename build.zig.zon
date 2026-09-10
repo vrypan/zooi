@@ -1,6 +1,6 @@
 .{
     .name = .zooi,
-    .version = "0.3.1",
+    .version = "0.3.2",
     .fingerprint = 0xb046bd6de056df73,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
