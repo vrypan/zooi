@@ -88,3 +88,10 @@ test "invalid bytes never stall the scan" {
 test "emoji are two columns" {
     try expectEqual(@as(u2, 2), width.codepointWidth(0x1F642)); // slightly smiling face
 }
+
+test "scalar compatibility uses terminal pictograph widths and retains control widths" {
+    try expectEqual(@as(u2, 2), width.codepointWidth(0x00a9));
+    try expectEqual(@as(u2, 2), width.codepointWidth(0x1f1ec));
+    try expectEqual(@as(u2, 1), width.codepointWidth('\n'));
+    try expectEqual(@as(u2, 1), width.codepointWidth(0xd800));
+}

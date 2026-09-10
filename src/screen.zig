@@ -284,17 +284,16 @@ pub const Screen = struct {
     }
 
     fn writeClipped(self: *Screen, text: []const u8, style: Style) void {
-        var clusters = unicode.grapheme.iterator(text);
+        var clusters = unicode.text(text).graphemes().measured().iterator();
         while (clusters.next()) |span| {
-            const bytes = text[span.start..span.end];
-            const measure = unicode.width.measureCluster(bytes);
-            if (measure.columns == 0) {
+            const bytes = text[span.start.value..span.end.value];
+            if (span.columns == 0) {
                 if (isAttachable(bytes)) self.appendCombining(bytes);
                 continue;
             }
 
-            const replacement = measure.columns == 3;
-            const columns: u2 = if (replacement) 1 else @intCast(measure.columns);
+            const replacement = !span.renderable;
+            const columns = span.columns;
             if (self.col >= self.frame_size.cols) return;
             const remaining = self.frame_size.cols - self.col;
             if (columns > remaining) {
@@ -327,7 +326,7 @@ pub const Screen = struct {
             const step = unicode.utf8.step(bytes[pos..]);
             pos += step.len;
             const cp = step.cp orelse return false;
-            if (cp < 0x20 or cp == 0x7f or unicode.width.codepointWidth(cp) != 0)
+            if (cp < 0x20 or cp == 0x7f or unicode.text(bytes[pos - step.len .. pos]).width() != 0)
                 return false;
         }
         return bytes.len > 0;

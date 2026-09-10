@@ -44,7 +44,7 @@ pub const Iterator = struct {
             return null;
         }
 
-        var clusters = unicode.grapheme.iterator(self.text[self.pos..]);
+        var clusters = unicode.text(self.text[self.pos..]).graphemes().measured().iterator();
         const line_start = self.pos;
         var start = line_start;
         var end = line_start;
@@ -55,7 +55,7 @@ pub const Iterator = struct {
         var allowed_breaks: ?unicode.line_break.Iterator = null;
 
         while (clusters.next()) |relative| {
-            const span = .{ .start = line_start + relative.start, .end = line_start + relative.end };
+            const span = .{ .start = line_start + relative.start.value, .end = line_start + relative.end.value };
             const bytes = self.text[span.start..span.end];
             if (isMandatoryBreak(bytes)) {
                 self.pos = span.end;
@@ -67,9 +67,8 @@ pub const Iterator = struct {
                 return .{ .start = start, .end = end, .columns = used, .kind = .text };
             }
 
-            const measure = unicode.width.measureCluster(bytes);
-            const cluster_columns: usize = if (measure.columns == 3) 1 else measure.columns;
-            if (measure.columns == 0) {
+            const cluster_columns: usize = relative.columns;
+            if (cluster_columns == 0) {
                 // Never expose leading orphan marks: a separate Screen.write
                 // could otherwise attach them to a caller's preceding cell.
                 if (used == 0) start = span.end;
@@ -106,11 +105,11 @@ pub const Iterator = struct {
                 // Consume an adjacent line terminator so an exact-width line
                 // remains one row; only a trailing terminator adds its final
                 // explicit empty row.
-                var following = unicode.grapheme.iterator(self.text[self.pos..]);
+                var following = unicode.text(self.text[self.pos..]).graphemes().measured().iterator();
                 if (following.next()) |next_span| {
-                    const next_bytes = self.text[self.pos + next_span.start .. self.pos + next_span.end];
+                    const next_bytes = self.text[self.pos + next_span.start.value .. self.pos + next_span.end.value];
                     if (isMandatoryBreak(next_bytes)) {
-                        self.pos += next_span.end;
+                        self.pos += next_span.end.value;
                         self.final_empty = self.pos == self.text.len;
                     }
                 }

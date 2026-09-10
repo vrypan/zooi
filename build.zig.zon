@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zunic = .{
-            .url = "git+https://github.com/vrypan/zunic?ref=v0.2.1#471404c4bc150d7e27c3d064fdde58e511284e18",
-            .hash = "zunic-0.2.1-yeyUTRKXeQBku8FeagePcoZmfL0emBZpS1k97O9EjaS4",
+            .url = "git+https://github.com/vrypan/zunic?ref=v0.3.1#8075772cd9141ef2c06fe08dfe6e1d7efd3a3196",
+            .hash = "zunic-0.3.1-yeyUTfvzzgBGhd3daI5phf_ceMQddr0q0HNhLO8sf6oQ",
         },
     },
     .paths = .{

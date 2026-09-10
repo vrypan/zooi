@@ -65,3 +65,29 @@ test "wrapping recognizes Unicode mandatory line breaks" {
     try expectFragment(&it, text, "", 0);
     try std.testing.expect(it.next() == null);
 }
+
+test "both wrapping modes retain empty input and trailing CRLF rows" {
+    for ([_]wrap.Mode{ .cell, .word }) |mode| {
+        var empty = try wrap.iterator("", 2, mode);
+        try expectFragment(&empty, "", "", 0);
+        try std.testing.expect(empty.next() == null);
+
+        const text = "ab\r\n\r\n";
+        var it = try wrap.iterator(text, 2, mode);
+        try expectFragment(&it, text, "ab", 2);
+        try expectFragment(&it, text, "", 0);
+        try expectFragment(&it, text, "", 0);
+        try std.testing.expect(it.next() == null);
+    }
+}
+
+test "measured replacement clusters occupy one column in both wrapping modes" {
+    for ([_]wrap.Mode{ .cell, .word }) |mode| {
+        const text = "a\u{903}\u{903}x";
+        var it = try wrap.iterator(text, 1, mode);
+        // Screen renders this non-renderable cluster as one question mark.
+        try expectFragment(&it, text, "a\u{903}\u{903}", 1);
+        try expectFragment(&it, text, "x", 1);
+        try std.testing.expect(it.next() == null);
+    }
+}

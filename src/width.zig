@@ -7,22 +7,27 @@
 //! screen.zig measures through this module.
 //!
 //! This compatibility facade keeps the original codepoint-oriented entry
-//! points available. New layout and rendering code use `unicode.width`, whose
+//! points available. New layout and rendering code use `unicode.text`, whose
 //! cluster policy is also used by `Screen`.
 
+const std = @import("std");
 const unicode = @import("zunic");
 
-/// Columns a codepoint occupies: 0 for combining marks and format characters,
-/// 2 for East Asian wide and fullwidth, 1 otherwise.
+/// Columns a codepoint occupies under Zunic's terminal grapheme policy.
+/// Controls retain the legacy one-column result; Screen filters them out.
+/// Pictographs and regional indicators use the same two-column policy as text.
 pub fn codepointWidth(cp: u21) u2 {
-    return unicode.width.codepointWidth(cp);
+    if (cp < 0x20 or cp == 0x7f) return 1;
+    var bytes: [4]u8 = undefined;
+    const len = std.unicode.utf8Encode(cp, &bytes) catch return 1;
+    return @intCast(unicode.text(bytes[0..len]).width());
 }
 
 /// Columns a UTF-8 string occupies after the same filtering and grapheme
 /// policy as `Screen`. Invalid bytes and controls take no cells, so text that
 /// is measured here and then drawn remains aligned.
 pub fn strWidth(bytes: []const u8) usize {
-    return unicode.width.textWidth(bytes);
+    return unicode.text(bytes).width();
 }
 
 pub const Step = struct {
